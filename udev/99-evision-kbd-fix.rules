@@ -1,0 +1,5 @@
+# Detach the broken second interface of Evision RGB Keyboard (320f:5055).
+# It causes endless USB resets that take down the RTL8761BU Bluetooth dongle
+# on the same hub. Interface 0 (real keyboard) stays bound.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceNumber}=="01", ATTRS{idVendor}=="320f", ATTRS{idProduct}=="5055", RUN+="/usr/local/bin/kbd-fix-unbind-if1"
+ACTION=="bind", SUBSYSTEM=="usb", ATTR{bInterfaceNumber}=="01", ATTRS{idVendor}=="320f", ATTRS{idProduct}=="5055", RUN+="/usr/local/bin/kbd-fix-unbind-if1"

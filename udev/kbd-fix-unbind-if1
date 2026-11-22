@@ -1,0 +1,10 @@
+#!/bin/sh
+# Evision RGB Keyboard (320f:5055) interface 1 (fake "mouse"/RGB channel)
+# spams the shared USB hub with resets and kills the Bluetooth dongle.
+# Detach only this interface, keep interface 0 (real keyboard) working.
+dev=${DEVPATH##*/}
+[ -e /sys$DEVPATH/driver ] || exit 0
+case "$dev" in
+  *:1.1) echo -n "$dev" > /sys$DEVPATH/driver/unbind 2>/dev/null ;;
+esac
+exit 0

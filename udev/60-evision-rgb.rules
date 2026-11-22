@@ -1,0 +1,2 @@
+# User-space access to the EVision RGB control interface (libusb/hidapi)
+SUBSYSTEM=="usb", ATTR{idVendor}=="320f", ATTR{idProduct}=="5055", TAG+="uaccess"

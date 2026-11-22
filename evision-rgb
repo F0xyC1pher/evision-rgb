@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Programmatic RGB control for EVision 320f:5055 keyboards via libhidapi-libusb.
+
+Talks directly to USB interface 1 (usage page 0xff1c), which is unbound from
+usbhid, so it does not trigger the USB reset loop that kills the Bluetooth dongle.
+"""
+import ctypes
+import json
+import os
+import sys
+import time
+
+VID, PID = 0x320F, 0x5055
+PACKET_SIZE = 64
+REPORT_ID = 4
+CMD_BEGIN = 0x01
+CMD_END = 0x02
+CMD_CAPS = 0x03
+CMD_READ_CONFIG = 0x05
+CMD_WRITE_CONFIG = 0x06
+CMD_SEND_DYNAMIC = 0x12
+CMD_END_DYNAMIC = 0x13
+
+OFFSET_PROFILE = 0x00
+OFFSET_FIRST_PROFILE = 0x01
+PROFILE_SIZE = 0x40
+
+# Parameter offsets inside profile config block (first 8 bytes used)
+P_MODE, P_BRIGHTNESS, P_SPEED, P_DIRECTION = 0, 1, 2, 3
+P_RANDOM, P_COLOR_R, P_COLOR_G, P_COLOR_B = 4, 5, 6, 7
+
+MODES = {
+    "wave-short": 0x01, "wave-long": 0x02, "wheel": 0x03, "spectrum": 0x04,
+    "breathing": 0x05, "static": 0x06, "reactive": 0x07, "reactive-ripple": 0x08,
+    "reactive-line": 0x09, "starlight-fast": 0x0A, "blooming": 0x0B,
+    "rainbow-vertical": 0x0C, "hurricane": 0x0D, "accumulate": 0x0E,
+    "starlight-slow": 0x0F, "visor": 0x10, "surmount": 0x11,
+    "rainbow-circle": 0x12, "custom": 0x14, "direct": 0xFF,
+}
+MODE_NAMES = {v: k for k, v in MODES.items()}
+
+# ---------------------------------------------------------------- libhidapi
+_lib = ctypes.CDLL("libhidapi-libusb.so.0")
+
+class _Info(ctypes.Structure):
+    pass
+_Info._fields_ = [
+    ("path", ctypes.c_char_p), ("vendor_id", ctypes.c_ushort),
+    ("product_id", ctypes.c_ushort), ("serial_number", ctypes.c_void_p),
+    ("release_number", ctypes.c_ushort), ("manufacturer_string", ctypes.c_void_p),
+    ("product_string", ctypes.c_void_p), ("usage_page", ctypes.c_ushort),
+    ("usage", ctypes.c_ushort), ("interface_number", ctypes.c_int),
+    ("next", ctypes.POINTER(_Info)),
+]
+for _n, _r, _a in [
+    ("hid_init", ctypes.c_int, []), ("hid_exit", ctypes.c_int, []),
+    ("hid_enumerate", ctypes.POINTER(_Info), [ctypes.c_ushort, ctypes.c_ushort]),
+    ("hid_open_path", ctypes.c_void_p, [ctypes.c_char_p]),
+    ("hid_write", ctypes.c_int, [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]),
+    ("hid_read_timeout", ctypes.c_int, [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]),
+    ("hid_close", None, [ctypes.c_void_p]),
+]:
+    _f = getattr(_lib, _n); _f.restype = _r; _f.argtypes = _a
+
+
+class Keyboard:
+    def __init__(self):
+        _lib.hid_init()
+        self.dev = None
+        d = _lib.hid_enumerate(VID, PID)
+        paths = []
+        while d:
+            di = d.contents
+            if di.interface_number == 1:
+                paths.append(bytes(di.path))
+            d = di.next
+        for p in paths:
+            self.dev = _lib.hid_open_path(p)
+            if self.dev:
+                self.path = p
+                break
+        if not self.dev:
+            raise RuntimeError("EVision interface 1 not reachable (is the udev unbind rule active?)")
+
+    def close(self):
+        if self.dev:
+            _lib.hid_close(self.dev)
+            self.dev = None
+        _lib.hid_exit()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+    def query(self, cmd, offset=0, data=b"", size=None, timeout=1200):
+        if size is None:
+            size = len(data)
+        if size > PACKET_SIZE - 8:
+            raise ValueError("packet too large")
+        pkt = bytearray(PACKET_SIZE)
+        pkt[0] = REPORT_ID
+        pkt[3] = cmd
+        pkt[4] = size
+        pkt[5] = offset & 0xFF
+        pkt[6] = (offset >> 8) & 0xFF
+        pkt[8:8 + len(data)] = data
+        chk = sum(pkt[3:]) & 0xFFFF
+        pkt[1] = chk & 0xFF
+        pkt[2] = chk >> 8
+        if _lib.hid_write(self.dev, bytes(pkt), PACKET_SIZE) != PACKET_SIZE:
+            raise RuntimeError("hid_write failed")
+        resp = (ctypes.c_ubyte * PACKET_SIZE)()
+        n = _lib.hid_read_timeout(self.dev, resp, PACKET_SIZE, timeout)
+        if n != PACKET_SIZE:
+            raise RuntimeError(f"no response (read {n})")
+        b = bytes(resp)
+        if b[0] != REPORT_ID or b[3] != cmd:
+            raise RuntimeError(f"unexpected response: {b[:12].hex()}")
+        if b[7] != 0:
+            raise RuntimeError(f"device returned error {b[7]:#x}")
+        return b[8:8 + b[4]]
+
+    def read(self, cmd, offset, size):
+        out = bytearray()
+        while size > 0:
+            chunk = min(size, PACKET_SIZE - 8)
+            out += self.query(cmd, offset, b"", chunk)
+            offset += chunk
+            size -= chunk
+        return bytes(out)
+
+    def write(self, cmd, offset, data):
+        for i in range(0, len(data), PACKET_SIZE - 8):
+            chunk = data[i:i + PACKET_SIZE - 8]
+            self.query(cmd, offset + i, chunk, len(chunk))
+
+    def caps(self):
+        c = self.query(CMD_CAPS, 0, b"", 7)
+        if c[0] != 0xAA or c[1] != 0x55:
+            raise RuntimeError(f"bad capabilities: {c.hex()}")
+        return c
+
+    def profile(self):
+        p = self.query(CMD_READ_CONFIG, OFFSET_PROFILE, b"", 1)[0]
+        return p if p <= 2 else 0
+
+    def config(self, profile=None):
+        if profile is None:
+            profile = self.profile()
+        c = self.read(CMD_READ_CONFIG, profile * PROFILE_SIZE + OFFSET_FIRST_PROFILE, 18)
+        return {
+            "mode": c[P_MODE], "brightness": c[P_BRIGHTNESS], "speed": c[P_SPEED],
+            "direction": c[P_DIRECTION], "random": c[P_RANDOM] != 0,
+            "color": (c[P_COLOR_R], c[P_COLOR_G], c[P_COLOR_B]),
+            "raw": c, "profile": profile,
+        }
+
+    def set_config(self, mode=None, brightness=None, speed=None, color=None, profile=None):
+        cur = self.config(profile)
+        buf = bytearray(cur["raw"])
+        if mode is not None: buf[P_MODE] = mode
+        if brightness is not None: buf[P_BRIGHTNESS] = brightness
+        if speed is not None: buf[P_SPEED] = speed
+        if color is not None:
+            buf[P_COLOR_R], buf[P_COLOR_G], buf[P_COLOR_B] = color
+        buf[P_RANDOM] = 0
+        target = cur["profile"] if profile is None else profile
+        offset = target * PROFILE_SIZE + OFFSET_FIRST_PROFILE
+        self.query(CMD_BEGIN)
+        self.write(CMD_WRITE_CONFIG, offset, bytes(buf[:8]))
+        self.query(CMD_END)
+
+
+def parse_color(s):
+    s = s.lstrip("#")
+    if len(s) != 6:
+        raise ValueError("color must be RRGGBB")
+    return tuple(int(s[i:i+2], 16) for i in (0, 2, 4))
+
+
+def cmd_status(kb):
+    c = kb.caps()
+    cfg = kb.config()
+    mode = MODE_NAMES.get(cfg["mode"], hex(cfg["mode"]))
+    print(f"path:       {kb.path.decode()}")
+    print(f"caps:       {c.hex()}  map_size={c[5]} macros={c[6] * 0x80}")
+    print(f"profile:    {cfg['profile']}")
+    print(f"mode:       {cfg['mode']:#04x} ({mode})")
+    print(f"brightness: {cfg['brightness']}")
+    print(f"speed:      {cfg['speed']}")
+    print(f"direction:  {cfg['direction']}")
+    print(f"random:     {cfg['random']}")
+    print(f"color:      #{''.join(f'{x:02x}' for x in cfg['color'])}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return 1
+    cmd = sys.argv[1]
+    with Keyboard() as kb:
+        if cmd == "status":
+            cmd_status(kb)
+        elif cmd in ("static", "color"):
+            color = parse_color(sys.argv[2])
+            kb.set_config(mode=MODES["static"], color=color,
+                          brightness=int(sys.argv[3]) if len(sys.argv) > 3 else None)
+            print("set:", kb.config())
+        elif cmd == "effect":
+            name = sys.argv[2]
+            mode = MODES[name] if name in MODES else int(name, 0)
+            kwargs = {"mode": mode}
+            for a in sys.argv[3:]:
+                k, v = a.split("=", 1)
+                kwargs[k] = int(v, 0) if k != "color" else parse_color(v)
+            kb.set_config(**kwargs)
+            print("set:", kb.config())
+        elif cmd == "save":
+            cfg = kb.config()
+            cfg["raw"] = cfg["raw"].hex()
+            path = os.path.expanduser("~/.config/evision-rgb.json")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(cfg, f)
+            print("saved current config to", path)
+        elif cmd == "restore":
+            path = os.path.expanduser("~/.config/evision-rgb.json")
+            with open(path) as f:
+                cfg = json.load(f)
+            kb.write(CMD_WRITE_CONFIG,
+                     cfg["profile"] * PROFILE_SIZE + OFFSET_FIRST_PROFILE,
+                     bytes.fromhex(cfg["raw"])[:8])
+            print("restored:", kb.config())
+        elif cmd == "effects":
+            for name, mode in sorted(MODES.items()):
+                print(f"  {name:20s} {mode:#04x}")
+        else:
+            print("unknown command:", cmd)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
