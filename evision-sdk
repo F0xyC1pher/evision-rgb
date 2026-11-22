@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Minimal OpenRGB SDK server that bridges MineLights to EVision 320F:5055.
+
+MineLights talks to OpenRGB over TCP 127.0.0.1:6742.  This server pretends to
+be an OpenRGB SDK server with one keyboard controller and forwards every LED
+update to the keyboard via the EVision HID protocol.
+
+Usage:  evision-sdk [--port 6742] [--hz 10]
+"""
+import argparse
+import importlib.machinery
+import importlib.util
+import socket
+import struct
+import threading
+import time
+
+# Load the main tool (filename has no .py suffix).
+_LOADER = importlib.machinery.SourceFileLoader(
+    "evision_rgb", "/usr/local/bin/evision-rgb")
+_SPEC = importlib.util.spec_from_loader("evision_rgb", _LOADER)
+ev = importlib.util.module_from_spec(_SPEC)
+_LOADER.exec_module(ev)
+
+magic = b"ORGB"
+PROTO = 4
+DEVICE_TYPE_KEYBOARD = 5
+ZONE_TYPE_LINEAR = 1
+MODE_FLAG_HAS_PER_LED_COLOR = 1 << 5
+MODE_COLORS_PER_LED = 1
+NUM_LEDS = 128
+
+PACKET = {
+    "REQUEST_CONTROLLER_COUNT": 0,
+    "REQUEST_CONTROLLER_DATA": 1,
+    "REQUEST_PROTOCOL_VERSION": 40,
+    "SET_CLIENT_NAME": 50,
+    "UPDATELEDS": 1050,
+    "UPDATEZONELEDS": 1051,
+    "UPDATESINGLELED": 1052,
+    "SETCUSTOMMODE": 1100,
+    "UPDATEMODE": 1101,
+}
+
+
+def pstr(s):
+    b = s.encode("utf-8") + b"\x00"
+    return struct.pack("<H", len(b)) + b
+
+
+def header(dev_id, pkt_id, size):
+    return magic + struct.pack("<III", dev_id, pkt_id, size)
+
+
+class Bridge:
+    def __init__(self, hz=10):
+        self.kb = ev.Keyboard()
+        self.names = self.kb.keymap()
+        self.led_names = []
+        for slot in range(NUM_LEDS):
+            name = next((n for n, s in self.names.items() if s == slot), None)
+            if name is None:
+                name = f"LED {slot}"
+            self.led_names.append(
+                name[0].upper() + name[1:] if name else f"LED {slot}")
+        self.colors = [0] * NUM_LEDS
+        self.dirty = threading.Event()
+        self.until = 0.0
+        self.lock = threading.Lock()
+        self.interval = 1.0 / hz
+        self.running = True
+        self.flusher = threading.Thread(target=self._flush_loop, daemon=True)
+        self.flusher.start()
+
+    def _flush_loop(self):
+        while self.running:
+            if self.dirty.wait(0.5):
+                self.dirty.clear()
+                self.until = time.time() + 1.5
+            if time.time() < self.until:
+                with self.lock:
+                    cols = list(self.colors)
+                try:
+                    rgb = [((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                           for c in cols]
+                    self.kb.set_dynamic(rgb)
+                except Exception as exc:
+                    print(f"[hid] {exc}", flush=True)
+            time.sleep(self.interval)
+
+    def set_colors(self, pairs):
+        with self.lock:
+            for idx, color in pairs:
+                if 0 <= idx < NUM_LEDS:
+                    self.colors[idx] = color & 0xFFFFFF
+        self.dirty.set()
+
+    def device_data(self):
+        b = struct.pack("<i", DEVICE_TYPE_KEYBOARD)
+        b += pstr("Evision RGB Keyboard")
+        b += pstr("Evision")
+        b += pstr("Evision 320F:5055")
+        b += pstr("1.0")
+        b += pstr("00E04C239987")
+        b += pstr("USB 1-1.6")
+
+        b += struct.pack("<H", 1)          # num_modes
+        b += struct.pack("<i", 0)          # active_mode
+        b += pstr("Direct")
+        b += struct.pack("<i", 0xFF)       # mode_value (<6)
+        b += struct.pack("<I", MODE_FLAG_HAS_PER_LED_COLOR)
+        b += struct.pack("<II", 0, 0)      # speed min/max
+        b += struct.pack("<II", 0, 100)    # brightness min/max (proto >=3)
+        b += struct.pack("<II", 0, NUM_LEDS)
+        b += struct.pack("<I", 0)          # speed
+        b += struct.pack("<I", 100)        # brightness
+        b += struct.pack("<I", 0)          # direction
+        b += struct.pack("<I", MODE_COLORS_PER_LED)
+        b += struct.pack("<H", NUM_LEDS)   # mode colors
+        b += struct.pack("<I", 0) * NUM_LEDS
+
+        b += struct.pack("<H", 1)          # num_zones
+        b += pstr("Keyboard")
+        b += struct.pack("<i", ZONE_TYPE_LINEAR)
+        b += struct.pack("<III", NUM_LEDS, NUM_LEDS, NUM_LEDS)
+        b += struct.pack("<H", 0)          # matrix map length
+        b += struct.pack("<H", 0)          # num_segments (proto >=4)
+
+        b += struct.pack("<H", NUM_LEDS)   # num_leds
+        for i, name in enumerate(self.led_names):
+            b += pstr(name)
+            b += struct.pack("<I", i)      # led_value (<6)
+
+        with self.lock:
+            cols = list(self.colors)
+        b += struct.pack("<H", NUM_LEDS)   # num_colors
+        for c in cols:
+            b += struct.pack("<I", c)
+        return b
+
+    def handle(self, conn, addr):
+        print(f"[sdk] client {addr}", flush=True)
+        try:
+            while True:
+                hdr = self._recv(conn, 16)
+                if not hdr:
+                    break
+                _, dev_id, pkt_id, size = struct.unpack("<4sIII", hdr)
+                data = self._recv(conn, size) if size else b""
+                if data is None:
+                    break
+
+                if pkt_id == PACKET["REQUEST_PROTOCOL_VERSION"]:
+                    client_ver = struct.unpack("<I", data[:4])[0]
+                    conn.sendall(header(dev_id, pkt_id, 4) +
+                                 struct.pack("<I", min(client_ver, PROTO)))
+
+                elif pkt_id == PACKET["REQUEST_CONTROLLER_COUNT"]:
+                    conn.sendall(header(dev_id, pkt_id, 4) + struct.pack("<I", 1))
+
+                elif pkt_id == PACKET["REQUEST_CONTROLLER_DATA"]:
+                    blob = self.device_data()
+                    conn.sendall(header(dev_id, pkt_id, 4 + len(blob)) +
+                                 struct.pack("<I", 4 + len(blob)) + blob)
+
+                elif pkt_id == PACKET["SET_CLIENT_NAME"]:
+                    pass
+
+                elif pkt_id == PACKET["UPDATELEDS"]:
+                    if len(data) >= 4:
+                        count = struct.unpack("<I", data[:4])[0]
+                        vals = struct.unpack(f"<{count}I", data[4:4 + 4 * count])
+                        self.set_colors(list(enumerate(vals)))
+
+                elif pkt_id == PACKET["UPDATEZONELEDS"]:
+                    if len(data) >= 4:
+                        count = struct.unpack("<I", data[:4])[0]
+                        vals = struct.unpack(f"<{count}I", data[4:4 + 4 * count])
+                        self.set_colors(list(enumerate(vals)))
+
+                elif pkt_id == PACKET["UPDATESINGLELED"]:
+                    if len(data) >= 8:
+                        idx, color = struct.unpack("<II", data[:8])
+                        self.set_colors([(idx, color)])
+
+                elif pkt_id in (PACKET["SETCUSTOMMODE"], PACKET["UPDATEMODE"]):
+                    pass
+                else:
+                    pass
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            print(f"[sdk] client {addr} disconnected", flush=True)
+            conn.close()
+
+    @staticmethod
+    def _recv(conn, n):
+        buf = b""
+        while len(buf) < n:
+            part = conn.recv(n - len(buf))
+            if not part:
+                return None if buf else None
+            buf += part
+        return buf
+
+    def close(self):
+        self.running = False
+        self.kb.end_dynamic()
+        self.kb.close()
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=6742)
+    ap.add_argument("--hz", type=float, default=10.0)
+    ap.add_argument("--host", default="127.0.0.1")
+    args = ap.parse_args()
+
+    bridge = Bridge(args.hz)
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind((args.host, args.port))
+    srv.listen(4)
+    print(f"[sdk] OpenRGB SDK bridge on {args.host}:{args.port} "
+          f"({NUM_LEDS} LEDs)", flush=True)
+    try:
+        while True:
+            conn, addr = srv.accept()
+            threading.Thread(target=bridge.handle, args=(conn, addr),
+                             daemon=True).start()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        srv.close()
+        bridge.close()
+
+
+if __name__ == "__main__":
+    main()

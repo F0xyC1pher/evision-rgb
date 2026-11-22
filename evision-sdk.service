@@ -1,0 +1,12 @@
+[Unit]
+Description=EVision RGB -> OpenRGB SDK bridge (for MineLights)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/evision-sdk --port 6742 --hz 10
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

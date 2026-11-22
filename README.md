@@ -78,6 +78,48 @@ static ...`, `effect ...` или `custom ...` — все эти команды �
 `starlight-fast`, `blooming`, `rainbow-vertical`, `hurricane`, `accumulate`,
 `starlight-slow`, `visor`, `surmount`, `rainbow-circle`, `custom`.
 
+## MineLights (Minecraft)
+
+[MineLights](https://modrinth.com/mod/minelights) на Linux управляет подсветкой
+через OpenRGB SDK на `127.0.0.1:6742`. Стоковый OpenRGB нашу клавиатуру не
+видит, поэтому в репозитории есть мост `evision-sdk`: он поднимает SDK-сервер,
+представляет клавиатуру как обычный 128-LED OpenRGB-контроллер и переводит
+обновления LED в HID-кадры.
+
+```sh
+# 1. Убедись, что настоящий OpenRGB не запущен (порт 6742 должен быть свободен)
+# 2. Запусти мост
+evision-sdk                      # или: systemctl --user enable --now evision-sdk
+
+# 3. В MineLights: Mods > MineLights > Config -> включи OpenRGB integration
+#    и нажми Refresh devices
+```
+
+Мост отдаёт клавиатуру с именами LED `Esc`, `F1`…`F12`, `1`…`0`, `Q`… и
+`Num0`…`Num9`, так что эффекты MineLights (health bar на F1-F4, компас на
+numpad, биомы, погода, статусы) работают без дополнительной настройки.
+Задержка обновления — ~10 Гц (`--hz`, можно поднять).
+
+Для проверки моста без MineLights:
+
+```sh
+python3 - <<'PY'
+import socket, struct, time
+s = socket.create_connection(('127.0.0.1', 6742))
+def send(pid, data=b''):
+    s.sendall(b'ORGB' + struct.pack('<III', 0, pid, len(data)) + data)
+send(40, struct.pack('<I', 4))       # protocol version
+send(0)                              # controller count
+cols = [0]*128
+cols[0] = 0x0000ff                   # Esc red (RGBColor = 0x00BBGGRR)
+cols[8] = 0x00ff00                   # F1 green
+cols[9] = 0xff0000                   # 1 blue
+p = struct.pack('<I', 128) + b''.join(struct.pack('<I', c) for c in cols)
+for _ in range(100):
+    send(1050, p); time.sleep(0.1)
+PY
+```
+
 ## Протокол
 
 64-байтовые HID-пакеты на интерфейсе 1, report ID `4`:
