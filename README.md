@@ -50,7 +50,28 @@ evision-rgb effect breathing speed=6 color=ff00ff
 evision-rgb effects                         # все режимы
 evision-rgb save                            # сохранить конфиг в ~/.config/evision-rgb.json
 evision-rgb restore                         # вернуть сохранённый конфиг
+
+# Per-key RGB БЕЗ демона — записывается во flash клавиатуры
+evision-rgb keys                            # все имена клавиш -> слоты
+evision-rgb custom esc=ff0000 f1=00ff00 1=0000ff
+evision-rgb rainbow                         # радуга по всем клавишам
+
+# Per-key "на лету" (пока процесс жив, для реакций на события игр)
+evision-rgb key esc=ff0000 f1=00ff00 1=0000ff
+evision-rgb slots 0=ff0000 8=00ff00 9=0000ff 30
 ```
+
+`custom` / `rainbow` пишут цвета в энергонезависимую память клавиатуры и
+переключают профиль в режим `custom` (0x14) — **никакой процесс не нужен**,
+цвета сохраняются после выхода команды и после перезагрузки.
+
+`key` / `slots` работают в volatile direct-режиме: прошивка сбрасывает его
+через ~1 с, поэтому процесс повторно отправляет полный кадр каждые ~0.2 с.
+`Ctrl-C` корректно возвращает клавиатуру в аппаратный режим.
+
+Для игр (Minecraft, Terraria): моды/скрипты могут вызывать `evision-rgb
+static ...`, `effect ...` или `custom ...` — все эти команды завершаются
+сразу, демон не требуется.
 
 Доступные режимы (`effect`): `wave-short`, `wave-long`, `wheel`, `spectrum`,
 `breathing`, `static`, `reactive`, `reactive-ripple`, `reactive-line`,

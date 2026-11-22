@@ -18,6 +18,7 @@ CMD_END = 0x02
 CMD_CAPS = 0x03
 CMD_READ_CONFIG = 0x05
 CMD_WRITE_CONFIG = 0x06
+CMD_WRITE_CUSTOM_COLORS = 0x0B
 CMD_SEND_DYNAMIC = 0x12
 CMD_END_DYNAMIC = 0x13
 
@@ -28,6 +29,8 @@ PROFILE_SIZE = 0x40
 # Parameter offsets inside profile config block (first 8 bytes used)
 P_MODE, P_BRIGHTNESS, P_SPEED, P_DIRECTION = 0, 1, 2, 3
 P_RANDOM, P_COLOR_R, P_COLOR_G, P_COLOR_B = 4, 5, 6, 7
+P_CURRENT_CUSTOM_MODE = 0x19
+MODE_CUSTOM = 0x14
 
 MODES = {
     "wave-short": 0x01, "wave-long": 0x02, "wheel": 0x03, "spectrum": 0x04,
@@ -38,6 +41,30 @@ MODES = {
     "rainbow-circle": 0x12, "custom": 0x14, "direct": 0xFF,
 }
 MODE_NAMES = {v: k for k, v in MODES.items()}
+
+CMD_READ_KEYMAP = 0x07
+
+# Standard HID keyboard usages -> short names used by the `key` command.
+HID_NAMES = {
+    0x29: "esc", 0x35: "grave", 0x2b: "tab", 0x39: "caps",
+    0x2a: "backspace", 0x2c: "space", 0x28: "enter",
+    0x2d: "minus", 0x2e: "equal", 0x2f: "leftbracket", 0x30: "rightbracket",
+    0x31: "backslash", 0x33: "semicolon", 0x34: "quote",
+    0x36: "comma", 0x37: "period", 0x38: "slash",
+    0x46: "prtsc", 0x47: "scrlk", 0x48: "pause", 0x49: "insert",
+    0x4a: "home", 0x4b: "pgup", 0x4c: "delete", 0x4d: "end", 0x4e: "pgdn",
+    0x4f: "right", 0x50: "left", 0x51: "down", 0x52: "up",
+    0x53: "numlock", 0x54: "numslash", 0x55: "numasterisk", 0x56: "numminus",
+    0x57: "numplus", 0x58: "numenter", 0x62: "num0", 0x63: "numdot",
+}
+for _i, _k in enumerate("abcdefghijklmnopqrstuvwxyz"):
+    HID_NAMES[0x04 + _i] = _k
+for _i in range(10):
+    HID_NAMES[0x1e + _i] = str((_i + 1) % 10)
+for _i in range(12):
+    HID_NAMES[0x3a + _i] = f"f{_i + 1}"
+for _i in range(9):
+    HID_NAMES[0x59 + _i] = f"num{_i + 1}"
 
 # ---------------------------------------------------------------- libhidapi
 _lib = ctypes.CDLL("libhidapi-libusb.so.0")
@@ -82,6 +109,12 @@ class Keyboard:
         if not self.dev:
             raise RuntimeError("EVision interface 1 not reachable (is the udev unbind rule active?)")
 
+        # Discard stale reports queued from previous runs.
+        while True:
+            tmp = (ctypes.c_ubyte * PACKET_SIZE)()
+            if _lib.hid_read_timeout(self.dev, tmp, PACKET_SIZE, 30) <= 0:
+                break
+
     def close(self):
         if self.dev:
             _lib.hid_close(self.dev)
@@ -109,18 +142,31 @@ class Keyboard:
         chk = sum(pkt[3:]) & 0xFFFF
         pkt[1] = chk & 0xFF
         pkt[2] = chk >> 8
-        if _lib.hid_write(self.dev, bytes(pkt), PACKET_SIZE) != PACKET_SIZE:
-            raise RuntimeError("hid_write failed")
+        self._write(bytes(pkt))
+
         resp = (ctypes.c_ubyte * PACKET_SIZE)()
-        n = _lib.hid_read_timeout(self.dev, resp, PACKET_SIZE, timeout)
-        if n != PACKET_SIZE:
-            raise RuntimeError(f"no response (read {n})")
+        deadline = time.time() + timeout / 1000.0
+        # Short reports are ordinary key input on the same interface — skip them.
+        while True:
+            remaining = int((deadline - time.time()) * 1000)
+            if remaining <= 0:
+                raise RuntimeError("no response (timeout)")
+            n = _lib.hid_read_timeout(self.dev, resp, PACKET_SIZE, remaining)
+            if n == PACKET_SIZE and resp[0] == REPORT_ID and resp[3] == cmd:
+                break
         b = bytes(resp)
         if b[0] != REPORT_ID or b[3] != cmd:
             raise RuntimeError(f"unexpected response: {b[:12].hex()}")
         if b[7] != 0:
             raise RuntimeError(f"device returned error {b[7]:#x}")
         return b[8:8 + b[4]]
+
+    def _write(self, pkt):
+        for attempt in range(4):
+            if _lib.hid_write(self.dev, pkt, PACKET_SIZE) == PACKET_SIZE:
+                return
+            time.sleep(0.02 * (attempt + 1))
+        raise RuntimeError("hid_write failed")
 
     def read(self, cmd, offset, size):
         out = bytearray()
@@ -135,6 +181,24 @@ class Keyboard:
         for i in range(0, len(data), PACKET_SIZE - 8):
             chunk = data[i:i + PACKET_SIZE - 8]
             self.query(cmd, offset + i, chunk, len(chunk))
+
+    def keymap(self):
+        """Read HID keymap; returns {key_name: led_slot}.
+
+        The firmware returns 3-byte records: [page, hi, lo].  The record index
+        (including d0 a2 NN gap markers) is the RGB LED slot.  Verified on the
+        device: 0=Esc, 1=grave, 2=Tab, 8=F1, 9=1, 10=Q.
+        """
+        raw = self.read(CMD_READ_KEYMAP, 0, 384)
+        result = {}
+        for slot, off in enumerate(range(0, len(raw) - 2, 3)):
+            page, hi, lo = raw[off:off + 3]
+            if page != 0x20 or lo == 0:
+                continue
+            name = HID_NAMES.get(lo)
+            if name and name not in result:
+                result[name] = slot
+        return result
 
     def caps(self):
         c = self.query(CMD_CAPS, 0, b"", 7)
@@ -157,6 +221,83 @@ class Keyboard:
             "raw": c, "profile": profile,
         }
 
+    # ---------------------------------------------------------- direct mode
+    def set_dynamic(self, colors):
+        """Write up to 128 slot colors. colors: iterable of (r,g,b)."""
+        buf = bytearray(128 * 3)
+        for i, c in enumerate(colors):
+            if i >= 128:
+                break
+            buf[i*3:i*3+3] = bytes(c)
+        self.write(CMD_SEND_DYNAMIC, 0, bytes(buf))
+
+    def refresh_dynamic(self, blank=6):
+        # Fire-and-forget: this firmware does not send a 64-byte reply to the
+        # keepalive packet.  Waiting for one only drains stale color ACKs and
+        # then times out.
+        off = blank * 3
+        pkt = bytearray(PACKET_SIZE)
+        pkt[0] = REPORT_ID
+        pkt[3] = CMD_SEND_DYNAMIC
+        pkt[4] = 1
+        pkt[5] = off & 0xFF
+        pkt[6] = (off >> 8) & 0xFF
+        chk = sum(pkt[3:]) & 0xFFFF
+        pkt[1] = chk & 0xFF
+        pkt[2] = chk >> 8
+        self._write(bytes(pkt))
+        # Keep the IN queue from filling up with ordinary 3-byte key reports.
+        tmp = (ctypes.c_ubyte * PACKET_SIZE)()
+        while _lib.hid_read_timeout(self.dev, tmp, PACKET_SIZE, 5) > 0:
+            pass
+
+    def end_dynamic(self):
+        try:
+            self.query(CMD_END_DYNAMIC, timeout=300)
+        except Exception:
+            pass
+
+    def direct_loop(self, colors, seconds=0, blank=6):
+        self.set_dynamic(colors)
+        started = time.time()
+        failures = 0
+        try:
+            while seconds <= 0 or time.time() - started < seconds:
+                time.sleep(0.2)
+                try:
+                    # Re-send the full frame: this firmware ignores the
+                    # one-byte "blank space" keepalive used by other models.
+                    self.set_dynamic(colors)
+                    failures = 0
+                except Exception:
+                    failures += 1
+                    if failures >= 5:
+                        break
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.end_dynamic()
+
+    def set_custom(self, colors, colorset=0):
+        """Store a 128-slot color map in keyboard flash (custom colorset 0-9)
+        and switch the active profile to custom mode — no daemon needed."""
+        buf = bytearray(128 * 3)
+        for i, c in enumerate(colors):
+            if i >= 128:
+                break
+            buf[i*3:i*3+3] = bytes(c)
+        self.query(CMD_BEGIN)
+        self.write(CMD_WRITE_CUSTOM_COLORS, 512 * colorset, bytes(buf))
+        self.query(CMD_END)
+
+        prof = self.profile()
+        base = prof * PROFILE_SIZE + OFFSET_FIRST_PROFILE
+        self.query(CMD_BEGIN)
+        self.write(CMD_WRITE_CONFIG, base + P_CURRENT_CUSTOM_MODE,
+                   bytes([colorset]))
+        self.query(CMD_END)
+        self.set_config(mode=MODE_CUSTOM)
+
     def set_config(self, mode=None, brightness=None, speed=None, color=None, profile=None):
         cur = self.config(profile)
         buf = bytearray(cur["raw"])
@@ -171,6 +312,15 @@ class Keyboard:
         self.query(CMD_BEGIN)
         self.write(CMD_WRITE_CONFIG, offset, bytes(buf[:8]))
         self.query(CMD_END)
+
+
+def rainbow_colors():
+    import colorsys
+    out = [(0, 0, 0)] * 128
+    for slot in range(128):
+        r, g, b = colorsys.hsv_to_rgb(slot / 128.0, 1.0, 1.0)
+        out[slot] = (int(r * 255), int(g * 255), int(b * 255))
+    return out
 
 
 def parse_color(s):
@@ -236,6 +386,78 @@ def main():
         elif cmd == "effects":
             for name, mode in sorted(MODES.items()):
                 print(f"  {name:20s} {mode:#04x}")
+        elif cmd == "direct":
+            color = parse_color(sys.argv[2])
+            seconds = float(sys.argv[3]) if len(sys.argv) > 3 else 0
+            print(f"Direct: all slots #{''.join(f'{x:02x}' for x in color)} "
+                  f"for {seconds or 'infinite'}s (Ctrl-C to stop)")
+            kb.direct_loop([color] * 128, seconds)
+        elif cmd == "probe":
+            slot = int(sys.argv[2], 0)
+            color = parse_color(sys.argv[3])
+            seconds = float(sys.argv[4]) if len(sys.argv) > 4 else 5
+            colors = [(0, 0, 0)] * 128
+            colors[slot] = color
+            print(f"Probe slot {slot} = #{''.join(f'{x:02x}' for x in color)} for {seconds}s")
+            kb.direct_loop(colors, seconds)
+        elif cmd == "keys":
+            for name, slot in sorted(kb.keymap().items(), key=lambda x: x[1]):
+                print(f"  {name:14s} {slot:3d}")
+        elif cmd == "custom":
+            slots = kb.keymap()
+            colors = [(0, 0, 0)] * 128
+            for spec in sys.argv[2:]:
+                name, value = spec.split("=", 1)
+                if name not in slots:
+                    raise SystemExit(f"unknown key: {name}")
+                colors[slots[name]] = parse_color(value)
+                print(f"  {name} -> slot {slots[name]} = {value}")
+            kb.set_custom(colors)
+            print("stored in keyboard flash (custom mode)")
+        elif cmd == "rainbow":
+            kb.set_custom(rainbow_colors())
+            print("rainbow stored in keyboard flash (custom mode, no daemon)")
+        elif cmd == "once":
+            colors = [(0, 0, 0)] * 128
+            for spec in sys.argv[2:]:
+                name, value = spec.split("=", 1)
+                slots = kb.keymap()
+                if name not in slots:
+                    raise SystemExit(f"unknown key: {name}")
+                colors[slots[name]] = parse_color(value)
+                print(f"  {name} -> slot {slots[name]} = {value}")
+            kb.set_dynamic(colors)
+            print("frame sent (no keepalive)")
+        elif cmd == "slots":
+            seconds = float(sys.argv[-1]) if sys.argv[-1].replace('.', '', 1).isdigit() else 0
+            specs = sys.argv[2:]
+            if seconds:
+                specs = specs[:-1]
+            colors = [(0, 0, 0)] * 128
+            for spec in specs:
+                slot, value = spec.split("=", 1)
+                colors[int(slot, 0)] = parse_color(value)
+                print(f"  slot {slot} = {value}")
+            kb.direct_loop(colors, seconds)
+        elif cmd == "key":
+            seconds = float(sys.argv[-1]) if sys.argv[-1].replace('.', '', 1).isdigit() else 0
+            specs = sys.argv[2:]
+            if seconds:
+                specs = specs[:-1]
+            slots = kb.keymap()
+            colors = [(0, 0, 0)] * 128
+            for spec in specs:
+                name, value = spec.split("=", 1)
+                name = name.lower()
+                if name not in slots:
+                    raise SystemExit(f"unknown key: {name} (see 'evision-rgb keys')")
+                colors[slots[name]] = parse_color(value)
+                print(f"  {name} -> slot {slots[name]} = {value}")
+            print(f"Direct per-key for {seconds or 'infinite'}s (Ctrl-C to stop)")
+            kb.direct_loop(colors, seconds)
+        elif cmd == "enddirect":
+            kb.end_dynamic()
+            print("direct mode ended")
         else:
             print("unknown command:", cmd)
             return 1
