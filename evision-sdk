@@ -64,28 +64,57 @@ class Bridge:
             self.led_names.append(
                 name[0].upper() + name[1:] if name else f"LED {slot}")
         self.colors = [0] * NUM_LEDS
+        self.applied = None
+        self.custom_mode_set = False
+        self.last_write = 0.0
         self.dirty = threading.Event()
-        self.until = 0.0
+        self.clients = 0
         self.lock = threading.Lock()
         self.interval = 1.0 / hz
         self.running = True
         self.flusher = threading.Thread(target=self._flush_loop, daemon=True)
         self.flusher.start()
 
+    def _reopen(self):
+        try:
+            self.kb.close()
+        except Exception:
+            pass
+        self.kb = ev.Keyboard()
+
     def _flush_loop(self):
+        # Smooth direct mode: stream the current frame at a steady rate.
+        # This firmware stops answering after ~90s of continuous queries,
+        # so the HID handle is proactively recycled every 20s.
+        last_reopen = time.time()
         while self.running:
-            if self.dirty.wait(0.5):
-                self.dirty.clear()
-                self.until = time.time() + 1.5
-            if time.time() < self.until:
-                with self.lock:
-                    cols = list(self.colors)
+            now = time.time()
+            if self.clients > 0 and now - last_reopen >= 20.0:
                 try:
-                    rgb = [((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
-                           for c in cols]
+                    self._reopen()
+                    last_reopen = now
+                except Exception as exc:
+                    print(f"[hid] reopen failed: {exc}", flush=True)
+            with self.lock:
+                cols = list(self.colors)
+            if self.clients > 0:
+                rgb = [((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                       for c in cols]
+                try:
                     self.kb.set_dynamic(rgb)
+                    self.failures = 0
                 except Exception as exc:
                     print(f"[hid] {exc}", flush=True)
+                    self.failures = getattr(self, "failures", 0) + 1
+                    if self.failures >= 3:
+                        try:
+                            self._reopen()
+                            last_reopen = time.time()
+                            print("[hid] reopened", flush=True)
+                        except Exception as reopen_exc:
+                            print(f"[hid] reopen failed: {reopen_exc}",
+                                  flush=True)
+                        self.failures = 0
             time.sleep(self.interval)
 
     def set_colors(self, pairs):
@@ -140,6 +169,7 @@ class Bridge:
 
     def handle(self, conn, addr):
         print(f"[sdk] client {addr}", flush=True)
+        self.clients += 1
         try:
             while True:
                 hdr = self._recv(conn, 16)
@@ -149,6 +179,11 @@ class Bridge:
                 data = self._recv(conn, size) if size else b""
                 if data is None:
                     break
+                if pkt_id not in (PACKET["UPDATELEDS"],
+                                  PACKET["UPDATEZONELEDS"],
+                                  PACKET["UPDATESINGLELED"]):
+                    print(f"[sdk] pkt {pkt_id} dev={dev_id} size={size} "
+                          f"data={data[:16].hex()}", flush=True)
 
                 if pkt_id == PACKET["REQUEST_PROTOCOL_VERSION"]:
                     client_ver = struct.unpack("<I", data[:4])[0]
@@ -166,22 +201,26 @@ class Bridge:
                 elif pkt_id == PACKET["SET_CLIENT_NAME"]:
                     pass
 
-                elif pkt_id == PACKET["UPDATELEDS"]:
-                    if len(data) >= 4:
-                        count = struct.unpack("<I", data[:4])[0]
-                        vals = struct.unpack(f"<{count}I", data[4:4 + 4 * count])
-                        self.set_colors(list(enumerate(vals)))
-
-                elif pkt_id == PACKET["UPDATEZONELEDS"]:
-                    if len(data) >= 4:
-                        count = struct.unpack("<I", data[:4])[0]
-                        vals = struct.unpack(f"<{count}I", data[4:4 + 4 * count])
-                        self.set_colors(list(enumerate(vals)))
+                elif pkt_id in (PACKET["UPDATELEDS"],
+                                PACKET["UPDATEZONELEDS"]):
+                    # MineLights/RGB.NET: [u32 payload_size][u16 count][RGBA...]
+                    if len(data) >= 6:
+                        count = struct.unpack_from("<H", data, 4)[0]
+                        pairs = []
+                        for i in range(min(count, NUM_LEDS)):
+                            off = 6 + i * 4
+                            if off + 3 >= len(data):
+                                break
+                            r, g, b = data[off], data[off + 1], data[off + 2]
+                            pairs.append((i, (b << 16) | (g << 8) | r))
+                        self.set_colors(pairs)
 
                 elif pkt_id == PACKET["UPDATESINGLELED"]:
-                    if len(data) >= 8:
-                        idx, color = struct.unpack("<II", data[:8])
-                        self.set_colors([(idx, color)])
+                    # [u32 payload_size][u32 index][RGBA]
+                    if len(data) >= 13:
+                        idx = struct.unpack_from("<I", data, 4)[0]
+                        r, g, b = data[8], data[9], data[10]
+                        self.set_colors([(idx, (b << 16) | (g << 8) | r)])
 
                 elif pkt_id in (PACKET["SETCUSTOMMODE"], PACKET["UPDATEMODE"]):
                     pass
@@ -190,6 +229,7 @@ class Bridge:
         except (ConnectionError, OSError):
             pass
         finally:
+            self.clients -= 1
             print(f"[sdk] client {addr} disconnected", flush=True)
             conn.close()
 

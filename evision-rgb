@@ -231,6 +231,34 @@ class Keyboard:
             buf[i*3:i*3+3] = bytes(c)
         self.write(CMD_SEND_DYNAMIC, 0, bytes(buf))
 
+    def set_dynamic_raw(self, colors):
+        """Send a full frame without waiting for ACKs (for continuous refresh).
+
+        This firmware stops answering after prolonged querying, so the
+        steady-state keepalive must be fire-and-forget.
+        """
+        buf = bytearray(128 * 3)
+        for i, c in enumerate(colors):
+            if i >= 128:
+                break
+            buf[i*3:i*3+3] = bytes(c)
+        for i in range(0, len(buf), PACKET_SIZE - 8):
+            chunk = buf[i:i + PACKET_SIZE - 8]
+            pkt = bytearray(PACKET_SIZE)
+            pkt[0] = REPORT_ID
+            pkt[3] = CMD_SEND_DYNAMIC
+            pkt[4] = len(chunk)
+            pkt[5] = i & 0xFF
+            pkt[6] = (i >> 8) & 0xFF
+            pkt[8:8 + len(chunk)] = chunk
+            chk = sum(pkt[3:]) & 0xFFFF
+            pkt[1] = chk & 0xFF
+            pkt[2] = chk >> 8
+            self._write(bytes(pkt))
+        tmp = (ctypes.c_ubyte * PACKET_SIZE)()
+        while _lib.hid_read_timeout(self.dev, tmp, PACKET_SIZE, 5) > 0:
+            pass
+
     def refresh_dynamic(self, blank=6):
         # Fire-and-forget: this firmware does not send a 64-byte reply to the
         # keepalive packet.  Waiting for one only drains stale color ACKs and
@@ -278,9 +306,8 @@ class Keyboard:
         finally:
             self.end_dynamic()
 
-    def set_custom(self, colors, colorset=0):
-        """Store a 128-slot color map in keyboard flash (custom colorset 0-9)
-        and switch the active profile to custom mode — no daemon needed."""
+    def write_custom_colors(self, colors, colorset=0):
+        """Write only the color map into keyboard flash (no mode switch)."""
         buf = bytearray(128 * 3)
         for i, c in enumerate(colors):
             if i >= 128:
@@ -289,6 +316,11 @@ class Keyboard:
         self.query(CMD_BEGIN)
         self.write(CMD_WRITE_CUSTOM_COLORS, 512 * colorset, bytes(buf))
         self.query(CMD_END)
+
+    def set_custom(self, colors, colorset=0):
+        """Store a 128-slot color map in keyboard flash (custom colorset 0-9)
+        and switch the active profile to custom mode — no daemon needed."""
+        self.write_custom_colors(colors, colorset)
 
         prof = self.profile()
         base = prof * PROFILE_SIZE + OFFSET_FIRST_PROFILE
