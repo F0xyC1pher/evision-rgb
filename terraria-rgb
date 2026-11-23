@@ -324,7 +324,7 @@ def main():
             # Re-scan the candidate arrays periodically; Terraria may
             # allocate a fresh copy when bindings are changed in-session.
             nonlocal_now = time.time()
-            if nonlocal_now - bind_refresh >= 10.0:
+            if nonlocal_now - bind_refresh >= 2.0:
                 for b in find_bindings_arrays(pid, mem):
                     if b not in bind_prev:
                         bind_prev[b] = live_bindings(mem, b)
