@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Minimal OpenRGB SDK server that bridges MineLights to EVision 320F:5055.
+"""OpenRGB SDK compatibility server for EVision keyboards.
 
-MineLights talks to OpenRGB over TCP 127.0.0.1:6742.  This server pretends to
-be an OpenRGB SDK server with one keyboard controller and forwards every LED
-update to the keyboard via the EVision HID protocol.
+Exposes the keyboard as a standard OpenRGB controller on TCP port 6742 so
+that RGB applications (for example MineLights) can drive its per-key
+lighting.  LED updates are translated into the keyboard's HID protocol.
 
 Usage:  evision-sdk [--port 6742] [--hz 10]
 """

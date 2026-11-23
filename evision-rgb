@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Programmatic RGB control for EVision 320f:5055 keyboards via libhidapi-libusb.
+"""RGB lighting control for EVision-based keyboards.
 
-Talks directly to USB interface 1 (usage page 0xff1c), which is unbound from
-usbhid, so it does not trigger the USB reset loop that kills the Bluetooth dongle.
+Communicates with the keyboard's vendor HID interface directly through
+libhidapi-libusb, bypassing the generic HID driver.  Provides hardware
+effects, persistent per-key color sets and a live per-key update mode.
 """
 import ctypes
 import json
