@@ -144,6 +144,62 @@ def read_bindings(cache):
     return bindings
 
 
+# XNA key codes used by Terraria -> names in our LED keymap
+_NAME_TO_KEYCODE = {
+    "esc": 27, "space": 32, "tab": 9, "enter": 13, "backspace": 8,
+    "lshift": 160, "rshift": 161, "lctrl": 162, "rctrl": 163,
+    "lalt": 164, "ralt": 165, "pgup": 33, "pgdn": 34,
+    "home": 36, "end": 35, "insert": 45, "delete": 46,
+    "numplus": 107, "numminus": 109, "numasterisk": 106, "numslash": 111,
+    "up": 38, "down": 40, "left": 37, "right": 39,
+    "leftbracket": 219, "rightbracket": 220, "semicolon": 186, "quote": 222,
+    "comma": 188, "period": 190, "slash": 191, "backslash": 220,
+    "minus": 189, "equal": 187, "grave": 192,
+}
+for _i, _c in enumerate("abcdefghijklmnopqrstuvwxyz"):
+    _NAME_TO_KEYCODE[_c] = ord(_c.upper())
+for _i in range(10):
+    _NAME_TO_KEYCODE[str(_i)] = 48 + _i
+for _i in range(1, 13):
+    _NAME_TO_KEYCODE[f"f{_i}"] = 111 + _i
+KEYCODE_TO_SLOT = {code: KEY_SLOTS[name] for name, code in _NAME_TO_KEYCODE.items()
+                   if name in KEY_SLOTS}
+
+# Signature of the keybinding array in Terraria memory (Up..QuickMount).
+_BIND_SIG = struct.pack("<11I", 87, 83, 65, 68, 32, 84, 69, 81, 160, 162, 82)
+
+
+def find_bindings_array(pid, mem):
+    """Locate the live keybinding array in game memory."""
+    for line in open(f"/proc/{pid}/maps"):
+        p = line.split()
+        if len(p) < 5 or "rw-p" not in p[1]:
+            continue
+        a, b = p[0].split("-")
+        a, b = int(a, 16), int(b, 16)
+        for off in range(a, b, 8 * 1024 * 1024):
+            try:
+                data = os.pread(mem, min(8 * 1024 * 1024 + 64, b - off), off)
+            except OSError:
+                continue
+            i = data.find(_BIND_SIG)
+            if i >= 0:
+                return off + i
+    return None
+
+
+def live_bindings(mem, base):
+    """Read QuickHeal/QuickMana/QuickBuff keycodes from the live array."""
+    out = {}
+    # _BIND_SIG starts at array index 6; QuickHeal is index 17 => +11
+    for action, index in (("QuickHeal", 11), ("QuickMana", 12),
+                          ("QuickBuff", 13)):
+        code = read_hp(mem, base + index * 4)
+        if code is not None:
+            out[action] = KEYCODE_TO_SLOT.get(code)
+    return out
+
+
 def bar_color(pct, low=(255, 0, 0), high=(0, 255, 0)):
     pct = max(0.0, min(1.0, pct))
     return tuple(int(low[i] + (high[i] - low[i]) * pct) for i in range(3))
@@ -190,6 +246,9 @@ def main():
     interval = 1.0 / args.hz
     cfg_cache = {}
     last_good = None
+    bind_base = find_bindings_array(pid, mem)
+    if bind_base:
+        print(f"bindings array at {hex(bind_base)}", flush=True)
     try:
         while True:
             hp = read_hp(mem, addr)
@@ -234,7 +293,9 @@ def main():
             for slot in WASD:
                 colors[slot] = BIOME_COLORS[biome]
 
-            binds = read_bindings(cfg_cache)
+            binds = (live_bindings(mem, bind_base) if bind_base else {})
+            if not binds.get("QuickHeal"):
+                binds = read_bindings(cfg_cache)
             heal_slot = binds.get("QuickHeal")
             mana_slot = binds.get("QuickMana")
             if heal_slot is not None:
