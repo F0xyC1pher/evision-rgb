@@ -349,6 +349,11 @@ def main():
             if mana_slot is not None:
                 miss = 1.0 - mana / max(1, max_mana)
                 colors[mana_slot] = (0, 0, 60 + int(195 * miss))
+            # Fill every unused key with a faint glow so the keyboard is
+            # readable in the dark.  Effects above override it.
+            for i, c in enumerate(colors):
+                if c[0] == 0 and c[1] == 0 and c[2] == 0:
+                    colors[i] = (14, 16, 20)
             send_colors(s, colors)
             time.sleep(interval)
     except KeyboardInterrupt:
