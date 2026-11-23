@@ -37,6 +37,7 @@ def find_hp_address(pid, mem, max_hp, prefer=None):
     known good HP/mana pair after a respawn moves the player object."""
     pair = struct.pack("<II", max_hp, max_hp)
     candidates = []
+    result = None
     for line in open(f"/proc/{pid}/maps"):
         p = line.split()
         if len(p) < 5 or "rw-p" not in p[1]:
@@ -49,6 +50,7 @@ def find_hp_address(pid, mem, max_hp, prefer=None):
             except OSError:
                 continue
             start = 0
+            found = None
             while True:
                 i = data.find(pair, start)
                 if i < 0:
@@ -169,8 +171,9 @@ KEYCODE_TO_SLOT = {code: KEY_SLOTS[name] for name, code in _NAME_TO_KEYCODE.item
 _BIND_SIG = struct.pack("<11I", 87, 83, 65, 68, 32, 84, 69, 81, 160, 162, 82)
 
 
-def find_bindings_array(pid, mem):
-    """Locate the live keybinding array in game memory."""
+def find_bindings_arrays(pid, mem):
+    """Locate all keybinding arrays in game memory."""
+    result = []
     for line in open(f"/proc/{pid}/maps"):
         p = line.split()
         if len(p) < 5 or "rw-p" not in p[1]:
@@ -182,11 +185,22 @@ def find_bindings_array(pid, mem):
                 data = os.pread(mem, min(8 * 1024 * 1024 + 64, b - off), off)
             except OSError:
                 continue
-            i = data.find(_BIND_SIG)
-            if i >= 0:
-                return off + i
-    return None
+            start = 0
+            found = None
+            while True:
+                i = data.find(_BIND_SIG, start)
+                if i < 0:
+                    break
+                found = off + i
+                start = i + 1
+            if found is not None:
+                result.append(found)
+    return result
 
+
+def find_bindings_array(pid, mem):
+    arrays = find_bindings_arrays(pid, mem)
+    return arrays[0] if arrays else None
 
 def live_bindings(mem, base):
     """Read QuickHeal/QuickMana/QuickBuff keycodes from the live array."""
@@ -223,6 +237,10 @@ def main():
     ap.add_argument("--port", type=int, default=6742)
     ap.add_argument("--hz", type=float, default=5.0)
     ap.add_argument("--max-hp", type=int, default=100)
+    ap.add_argument("--list-binds", action="store_true",
+                    help="list candidate binding arrays and exit")
+    ap.add_argument("--bind-addr", type=str, default=None,
+                    help="binding array address (0x...)")
     ap.add_argument("--addr", type=str, default=None,
                     help="HP field address from a previous run (0x...)")
     args = ap.parse_args()
@@ -234,6 +252,13 @@ def main():
     if not pid:
         raise SystemExit("Terraria process not found")
     mem = open_mem(pid)
+    if args.list_binds:
+        for base in find_bindings_arrays(pid, mem):
+            vals = live_bindings(mem, base)
+            print(f"{hex(base)}  heal={vals.get('QuickHeal')} "
+                  f"mana={vals.get('QuickMana')} buff={vals.get('QuickBuff')}")
+        os.close(mem)
+        return
     if args.addr:
         addr, max_hp = int(args.addr, 0), args.max_hp
     else:
@@ -246,7 +271,7 @@ def main():
     interval = 1.0 / args.hz
     cfg_cache = {}
     last_good = None
-    bind_base = find_bindings_array(pid, mem)
+    bind_base = int(args.bind_addr, 0) if args.bind_addr else find_bindings_array(pid, mem)
     if bind_base:
         print(f"bindings array at {hex(bind_base)}", flush=True)
     try:
