@@ -121,13 +121,11 @@ def config_key_to_slot(key):
 
 
 def read_bindings(cache):
-    """Read Terraria key bindings, reloading only when the file changes."""
-    try:
-        mtime = os.stat(CONFIG).st_mtime
-    except OSError:
+    """Read Terraria key bindings every second (the game may rewrite them in-place)."""
+    now = time.time()
+    if now - cache.get("checked", 0.0) < 1.0:
         return cache.get("bindings", {})
-    if mtime == cache.get("mtime"):
-        return cache["bindings"]
+    cache["checked"] = now
     import json
     try:
         data = json.load(open(CONFIG))
@@ -142,7 +140,6 @@ def read_bindings(cache):
                 bindings[action] = slot
     except (OSError, KeyError, ValueError):
         bindings = cache.get("bindings", {})
-    cache["mtime"] = mtime
     cache["bindings"] = bindings
     return bindings
 
