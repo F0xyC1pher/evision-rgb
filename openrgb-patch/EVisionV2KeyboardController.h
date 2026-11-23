@@ -13,6 +13,7 @@
 
 #include <string>
 #include <hidapi.h>
+#include "hidapi_wrapper.h"
 #include "RGBController.h"
 
 #define EVISION_V2_PACKET_SIZE                       64
@@ -159,7 +160,13 @@ class EVisionV2KeyboardController
 {
 public:
     EVisionV2KeyboardController(hid_device* dev_handle, const char* path, EVisionV2KeyboardLayout dev_layout, std::string dev_name);
+    EVisionV2KeyboardController(hidapi_wrapper wrapper, hid_device* dev_handle, const char* path, EVisionV2KeyboardLayout dev_layout, std::string dev_name);
     ~EVisionV2KeyboardController();
+
+private:
+    void Init();
+
+public:
 
     std::string GetName();
     std::string GetSerial();
@@ -187,6 +194,8 @@ private:
     std::string serial;
     std::string location;
     hid_device* dev;
+    hidapi_wrapper  wrap;
+    bool            use_wrapper = false;
 
     size_t      map_size;
     size_t      macros_size;

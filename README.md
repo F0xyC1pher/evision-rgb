@@ -152,12 +152,13 @@ PY
 cd openrgb-patch
 ./build.sh
 sudo install -m 755 ~/openrgb-custom/openrgb /usr/local/bin/openrgb-evision
-sudo cp 60-openrgb-evision.rules /etc/udev/rules.d/
+openrgb-evision --list-devices
 ```
 
-Подробности и ограничения — в `openrgb-patch/README.md`. При таком варианте
-udev-правило `99-evision-kbd-fix` должно быть отключено: OpenRGB работает через
-hidraw, а не через напрямую открытый интерфейс.
+Патч использует libusb-путь, поэтому **udev-правило `99-evision-kbd-fix` можно
+оставить включённым**: интерфейс 1 остаётся отвязанным от `usbhid`, не создаёт
+фейковых клавиатурных событий и не вызывает USB-ресетов. Подробности — в
+`openrgb-patch/README.md`.
 
 ## Протокол
 

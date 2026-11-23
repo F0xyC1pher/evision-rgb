@@ -32,6 +32,8 @@
 #define BYGG_CSB_ICL01_PID                          0x5041
 #define EVISION_5055_PID                            0x5055
 
+static bool evision5055_registered = false;
+
 DetectedControllers DetectEVisionV2Keyboards(hid_device_info* info, const std::string& name)
 {
     DetectedControllers detected_controllers;
@@ -89,8 +91,7 @@ DetectedControllers DetectEvision5055Keyboards(hid_device_info* info, const std:
     DetectedControllers detected_controllers;
 
     /* One physical interface can expose several hidraw nodes.  Register once. */
-    static bool registered = false;
-    if(registered || info->interface_number != 1)
+    if(evision5055_registered || info->interface_number != 1)
     {
         return detected_controllers;
     }
@@ -101,7 +102,28 @@ DetectedControllers DetectEvision5055Keyboards(hid_device_info* info, const std:
     {
         EVisionV2KeyboardController* controller = new EVisionV2KeyboardController(dev, info->path, EVISION_5055_KEYBOARD_LAYOUT, name);
         detected_controllers.push_back(new RGBController_EVisionV2Keyboard(controller, EVISION_V2_KEYBOARD_PART_KEYBOARD));
-        registered = true;
+        evision5055_registered = true;
+    }
+
+    return detected_controllers;
+}
+
+DetectedControllers DetectEvision5055Wrapped(hidapi_wrapper wrapper, hid_device_info* info, const std::string& name)
+{
+    DetectedControllers detected_controllers;
+
+    if(evision5055_registered || info->interface_number != 1)
+    {
+        return detected_controllers;
+    }
+
+    hid_device* dev = wrapper.hid_open_path(info->path);
+
+    if(dev)
+    {
+        EVisionV2KeyboardController* controller = new EVisionV2KeyboardController(wrapper, dev, info->path, EVISION_5055_KEYBOARD_LAYOUT, name);
+        detected_controllers.push_back(new RGBController_EVisionV2Keyboard(controller, EVISION_V2_KEYBOARD_PART_KEYBOARD));
+        evision5055_registered = true;
     }
 
     return detected_controllers;
@@ -111,5 +133,6 @@ DetectedControllers DetectEvision5055Keyboards(hid_device_info* info, const std:
 | Keyboards                                                 |
 \*---------------------------------------------------------*/
 REGISTER_HID_DETECTOR("EVision RGB Keyboard 320F:5055", DetectEvision5055Keyboards, EVISION_VID, EVISION_5055_PID);
+REGISTER_HID_WRAPPED_DETECTOR_I("EVision RGB Keyboard 320F:5055 (libusb)", DetectEvision5055Wrapped, EVISION_VID, EVISION_5055_PID, 1);
 REGISTER_HID_DETECTOR_IP("EVision Keyboard 320F:5041",  DetectEVisionV2Keyboards,   EVISION_VID,    BYGG_CSB_ICL01_PID, 1, EVISION_KEYBOARD_USAGE_PAGE);
 REGISTER_HID_DETECTOR_IP("Endorfy Omnis",               DetectEndorfyKeyboards,     SPCGEAR_VID,    ENDORFY_OMNIS_PID,  1, EVISION_KEYBOARD_USAGE_PAGE);

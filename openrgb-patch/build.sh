@@ -15,6 +15,8 @@ cp "$PATCH_DIR/EVisionV2KeyboardController.h"    "$TARGET/"
 cp "$PATCH_DIR/EVisionV2KeyboardController.cpp"  "$TARGET/"
 cp "$PATCH_DIR/EVisionV2KeyboardControllerDetect.cpp" "$TARGET/"
 cp "$PATCH_DIR/RGBController_EVisionV2Keyboard.cpp"   "$TARGET/"
+cp "$PATCH_DIR/hidapi_wrapper.h"                      "$SRC/hidapi_wrapper/"
+cp "$PATCH_DIR/DetectionManager.cpp"                  "$SRC/"
 
 cd "$SRC"
 qmake6 OpenRGB.pro -o Makefile.custom

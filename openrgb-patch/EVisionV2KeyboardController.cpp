@@ -49,16 +49,11 @@ static uint8_t endorfy_map[EVISION_V2_MATRIX_WIDTH * EVISION_V2_MATRIX_HEIGHT] =
     105, 106, 107,                111,                115, 116, 117, 118, 119, 120, 121, 123,      124,
 };
 
-EVisionV2KeyboardController::EVisionV2KeyboardController(hid_device* dev_handle, const char* path, EVisionV2KeyboardLayout dev_layout, std::string dev_name)
+void EVisionV2KeyboardController::Init()
 {
-    dev                 = dev_handle;
-    location            = path;
-    name                = dev_name;
-    layout              = dev_layout;
-
     /*---------------------------------------------------------*\
     | Get capabilities and layout                               |
-    \*---------------------------------------------------------*/
+    \---------------------------------------------------------*/
     uint8_t buffer[7];
     if(Read(EVISION_V2_CMD_READ_CAPABILITIES, 0, sizeof(buffer), buffer) < 0)
     {
@@ -91,9 +86,30 @@ EVisionV2KeyboardController::EVisionV2KeyboardController(hid_device* dev_handle,
     }
 }
 
+EVisionV2KeyboardController::EVisionV2KeyboardController(hid_device* dev_handle, const char* path, EVisionV2KeyboardLayout dev_layout, std::string dev_name)
+{
+    dev                 = dev_handle;
+    location            = path;
+    name                = dev_name;
+    layout              = dev_layout;
+    use_wrapper         = false;
+    Init();
+}
+
+EVisionV2KeyboardController::EVisionV2KeyboardController(hidapi_wrapper wrapper, hid_device* dev_handle, const char* path, EVisionV2KeyboardLayout dev_layout, std::string dev_name)
+{
+    dev                 = dev_handle;
+    location            = path;
+    name                = dev_name;
+    layout              = dev_layout;
+    wrap                = wrapper;
+    use_wrapper         = true;
+    Init();
+}
+
 EVisionV2KeyboardController::~EVisionV2KeyboardController()
 {
-    hid_close(dev);
+    if(use_wrapper) { wrap.hid_close(dev); } else { hid_close(dev); }
 }
 
 std::string EVisionV2KeyboardController::GetName()
@@ -104,7 +120,8 @@ std::string EVisionV2KeyboardController::GetName()
 std::string EVisionV2KeyboardController::GetSerial()
 {
     wchar_t serial_string[128];
-    int ret = hid_get_serial_number_string(dev, serial_string, 128);
+    int ret = use_wrapper ? wrap.hid_get_serial_number_string(dev, serial_string, 128)
+                          : hid_get_serial_number_string(dev, serial_string, 128);
 
     if(ret != 0)
     {
@@ -147,11 +164,14 @@ int EVisionV2KeyboardController::Query(uint8_t cmd, uint16_t offset, const uint8
     {
         const std::lock_guard<std::mutex> lock(query_mutex);
 
-        hid_write(dev, buffer, sizeof(buffer));
+        int written = use_wrapper ? wrap.hid_write(dev, buffer, sizeof(buffer))
+                                  : hid_write(dev, buffer, sizeof(buffer));
+        (void)written;
 
         do
         {
-            bytes_read = hid_read(dev, buffer, sizeof(buffer));
+            bytes_read = use_wrapper ? wrap.hid_read(dev, buffer, sizeof(buffer))
+                                     : hid_read(dev, buffer, sizeof(buffer));
         } while(bytes_read != 0 && buffer[0] != EVISION_V2_REPORT_ID);
     }
     query_check_buffer(bytes_read == sizeof(buffer));
