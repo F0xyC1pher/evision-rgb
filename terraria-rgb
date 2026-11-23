@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Vanilla Terraria RGB bridge: read player HP from process memory and send
+colors to the EVision OpenRGB SDK bridge. No game mods are required.
+
+Run with sudo (needed to read /proc/<pid>/mem when ptrace_scope=1).
+"""
+import argparse
+import os
+import socket
+import struct
+import time
+
+# Prefix found in Terraria's player structure: 09 00 00 00 <max> <max>
+# followed by a 4-byte little-endian current HP.
+
+
+def find_pid():
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            cmd = open(f"/proc/{pid}/cmdline", "rb").read()
+        except OSError:
+            continue
+        if b"Terraria.bin" in cmd:
+            return int(pid)
+    return None
+
+
+def open_mem(pid):
+    return os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+
+
+def find_hp_address(pid, mem, max_hp):
+    prefix = struct.pack("<III", 9, max_hp, max_hp)
+    for line in open(f"/proc/{pid}/maps"):
+        p = line.split()
+        if len(p) < 5 or "rw-p" not in p[1]:
+            continue
+        a, b = p[0].split("-")
+        a, b = int(a, 16), int(b, 16)
+        for off in range(a, b, 8 * 1024 * 1024):
+            try:
+                data = os.pread(mem, min(8 * 1024 * 1024 + 32, b - off), off)
+            except OSError:
+                continue
+            start = 0
+            while True:
+                i = data.find(prefix, start)
+                if i < 0:
+                    break
+                addr = off + i + len(prefix)
+                hp = read_hp(mem, addr)
+                if hp is not None and 0 < hp <= max_hp:
+                    return addr, max_hp
+                start = i + 1
+    return None, None
+
+
+def read_hp(mem, addr):
+    try:
+        return struct.unpack("<I", os.pread(mem, 4, addr))[0]
+    except OSError:
+        return None
+
+
+def hp_color(hp, max_hp):
+    pct = max(0.0, min(1.0, hp / max(1, max_hp)))
+    # Red when low, green when full.
+    return int(255 * (1 - pct)), int(255 * pct), 0
+
+
+def connect_sdk(port):
+    s = socket.create_connection(("127.0.0.1", port), timeout=3)
+    s.settimeout(3)
+    return s
+
+
+def send_colors(s, rgb):
+    inner = struct.pack("<H", 128) + b"".join(
+        struct.pack("<BBBB", rgb[0], rgb[1], rgb[2], 255) for _ in range(128))
+    payload = struct.pack("<I", 4 + len(inner)) + inner
+    s.sendall(b"ORGB" + struct.pack("<III", 0, 1050, len(payload)) + payload)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--port", type=int, default=6742)
+    ap.add_argument("--hz", type=float, default=5.0)
+    ap.add_argument("--max-hp", type=int, default=100)
+    args = ap.parse_args()
+
+    if os.geteuid() != 0:
+        raise SystemExit("Run with sudo: sudo terraria-rgb")
+
+    pid = find_pid()
+    if not pid:
+        raise SystemExit("Terraria process not found")
+    mem = open_mem(pid)
+    addr, max_hp = find_hp_address(pid, mem, args.max_hp)
+    if addr is None:
+        raise SystemExit("HP pattern not found (game version may differ)")
+    print(f"Terraria pid={pid} HP address={hex(addr)} max={max_hp}", flush=True)
+
+    s = connect_sdk(args.port)
+    interval = 1.0 / args.hz
+    try:
+        while True:
+            hp = read_hp(mem, addr)
+            if hp is None:
+                break
+            if hp > max_hp:
+                # armor/life upgrades change the pattern -> re-scan
+                addr, max_hp = find_hp_address(pid, mem, hp)
+                if addr is None:
+                    break
+                hp = read_hp(mem, addr)
+            send_colors(s, hp_color(hp, max_hp))
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        s.close()
+        os.close(mem)
+
+
+if __name__ == "__main__":
+    main()
