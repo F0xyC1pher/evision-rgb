@@ -64,10 +64,14 @@ def read_hp(mem, addr):
         return None
 
 
-def hp_color(hp, max_hp):
-    pct = max(0.0, min(1.0, hp / max(1, max_hp)))
-    # Red when low, green when full.
-    return int(255 * (1 - pct)), int(255 * pct), 0
+# LED slots from the keyboard keymap
+F_KEYS   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80]   # F1..F10
+NUM_KEYS = [9, 17, 25, 33, 41, 49, 57, 65, 73, 81]  # number row 1..0
+
+
+def bar_color(pct, low=(255, 0, 0), high=(0, 255, 0)):
+    pct = max(0.0, min(1.0, pct))
+    return tuple(int(low[i] + (high[i] - low[i]) * pct) for i in range(3))
 
 
 def connect_sdk(port):
@@ -76,9 +80,9 @@ def connect_sdk(port):
     return s
 
 
-def send_colors(s, rgb):
+def send_colors(s, colors):
     inner = struct.pack("<H", 128) + b"".join(
-        struct.pack("<BBBB", rgb[0], rgb[1], rgb[2], 255) for _ in range(128))
+        struct.pack("<BBBB", c[0], c[1], c[2], 255) for c in colors)
     payload = struct.pack("<I", 4 + len(inner)) + inner
     s.sendall(b"ORGB" + struct.pack("<III", 0, 1050, len(payload)) + payload)
 
@@ -115,7 +119,18 @@ def main():
                 if addr is None:
                     break
                 hp = read_hp(mem, addr)
-            send_colors(s, hp_color(hp, max_hp))
+            mana = read_hp(mem, addr + 4) or 0
+            max_mana = read_hp(mem, addr + 8) or 120
+            colors = [(0, 0, 0)] * 128
+            hp_c = bar_color(hp / max(1, max_hp))
+            mana_c = bar_color(mana / max(1, max_mana),
+                               low=(60, 0, 255), high=(0, 160, 255))
+            for i, slot in enumerate(F_KEYS):
+                colors[slot] = (255, 0, 0) if hp == 0 else (
+                    hp_c if i < round(10 * hp / max(1, max_hp)) else (0, 0, 0))
+            for i, slot in enumerate(NUM_KEYS):
+                colors[slot] = mana_c if i < round(10 * mana / max(1, max_mana)) else (0, 0, 0)
+            send_colors(s, colors)
             time.sleep(interval)
     except KeyboardInterrupt:
         pass
