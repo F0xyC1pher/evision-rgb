@@ -141,6 +141,24 @@ time.sleep(2)
 PY
 ```
 
+## Нативный OpenRGB
+
+Стоковый OpenRGB не знает PID `320F:5055`. В каталоге `openrgb-patch/` лежит
+патч драйвера EVision V2 с картой на 128 светодиодов, снятой с клавиатуры, и
+скрипт сборки. Это позволяет использовать обычный OpenRGB вместе с его
+плагинами, без SDK-моста:
+
+```sh
+cd openrgb-patch
+./build.sh
+sudo install -m 755 ~/openrgb-custom/openrgb /usr/local/bin/openrgb-evision
+sudo cp 60-openrgb-evision.rules /etc/udev/rules.d/
+```
+
+Подробности и ограничения — в `openrgb-patch/README.md`. При таком варианте
+udev-правило `99-evision-kbd-fix` должно быть отключено: OpenRGB работает через
+hidraw, а не через напрямую открытый интерфейс.
+
 ## Протокол
 
 Пакеты HID по 64 байта, report ID `4`:

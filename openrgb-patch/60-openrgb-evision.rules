@@ -1,0 +1,2 @@
+# Access to the configuration interface of EVision 320F:5055 keyboards
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="320f", ATTRS{idProduct}=="5055", TAG+="uaccess"
