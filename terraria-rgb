@@ -67,6 +67,10 @@ def read_hp(mem, addr):
 # LED slots from the keyboard keymap
 F_KEYS   = [8, 16, 24, 32, 40, 48, 56, 64, 72, 80]   # F1..F10
 NUM_KEYS = [9, 17, 25, 33, 41, 49, 57, 65, 73, 81]  # number row 1..0
+WASD     = [18, 11, 19, 27]                          # W A S D
+FOREST_OFF, DESERT_OFF, SNOW_OFF = -1116, -992, -1164
+BIOME_COLORS = {"forest": (0, 255, 0), "desert": (255, 200, 0),
+                "snow": (0, 200, 255), "unknown": (40, 40, 40)}
 
 
 def bar_color(pct, low=(255, 0, 0), high=(0, 255, 0)):
@@ -130,6 +134,19 @@ def main():
                     hp_c if i < round(10 * hp / max(1, max_hp)) else (0, 0, 0))
             for i, slot in enumerate(NUM_KEYS):
                 colors[slot] = mana_c if i < round(10 * mana / max(1, max_mana)) else (0, 0, 0)
+            forest = read_hp(mem, addr + FOREST_OFF)
+            desert = read_hp(mem, addr + DESERT_OFF)
+            snow = read_hp(mem, addr + SNOW_OFF)
+            if forest == 10:
+                biome = "forest"
+            elif desert == 1:
+                biome = "desert"
+            elif snow == 5:
+                biome = "snow"
+            else:
+                biome = "unknown"
+            for slot in WASD:
+                colors[slot] = BIOME_COLORS[biome]
             send_colors(s, colors)
             time.sleep(interval)
     except KeyboardInterrupt:
