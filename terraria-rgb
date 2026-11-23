@@ -31,9 +31,11 @@ def open_mem(pid):
     return os.open(f"/proc/{pid}/mem", os.O_RDONLY)
 
 
-def find_hp_address(pid, mem, max_hp):
-    """Find the player HP field by the 9/<max>/<max> prefix in the struct."""
-    prefix = struct.pack("<III", 9, max_hp, max_hp)
+def find_hp_address(pid, mem, max_hp, prefer=None):
+    """Find the player HP field by structure shape, preferring the last
+    known good HP/mana pair after a respawn moves the player object."""
+    pair = struct.pack("<II", max_hp, max_hp)
+    candidates = []
     for line in open(f"/proc/{pid}/maps"):
         p = line.split()
         if len(p) < 5 or "rw-p" not in p[1]:
@@ -42,19 +44,29 @@ def find_hp_address(pid, mem, max_hp):
         a, b = int(a, 16), int(b, 16)
         for off in range(a, b, 8 * 1024 * 1024):
             try:
-                data = os.pread(mem, min(8 * 1024 * 1024 + 32, b - off), off)
+                data = os.pread(mem, min(8 * 1024 * 1024 + 64, b - off), off)
             except OSError:
                 continue
             start = 0
             while True:
-                i = data.find(prefix, start)
+                i = data.find(pair, start)
                 if i < 0:
                     break
-                addr = off + i + len(prefix)
+                addr = off + i + 8
                 hp = read_hp(mem, addr)
-                if hp is not None and 0 < hp <= max_hp:
-                    return addr, max_hp
+                mana = read_hp(mem, addr + 4)
+                if (hp is not None and mana is not None and
+                        0 < hp <= max_hp and 20 <= mana <= 500 and
+                        read_hp(mem, addr + 8) == mana and
+                        read_hp(mem, addr + 12) == mana):
+                    candidates.append((addr, hp, mana))
                 start = i + 1
+    if prefer:
+        for addr, hp, mana in candidates:
+            if hp == prefer[0] and mana == prefer[1]:
+                return addr, max_hp
+    if candidates:
+        return candidates[0][0], max_hp
     return None, None
 
 def read_hp(mem, addr):
@@ -71,6 +83,57 @@ WASD     = [18, 11, 19, 27]                          # W A S D
 FOREST_OFF, DESERT_OFF, SNOW_OFF = -1116, -992, -1164
 BIOME_COLORS = {"forest": (0, 255, 0), "desert": (255, 200, 0),
                 "snow": (0, 200, 255), "unknown": (40, 40, 40)}
+
+KEY_SLOTS = {"esc": 0, "grave": 1, "tab": 2, "caps": 3, "numlock": 6, "f1": 8, "1": 9, "q": 10, "a": 11, "numslash": 14, "f2": 16, "2": 17, "w": 18, "s": 19, "z": 20, "numasterisk": 22, "f3": 24, "3": 25, "e": 26, "d": 27, "x": 28, "numminus": 30, "f4": 32, "4": 33, "r": 34, "f": 35, "c": 36, "num7": 38, "f5": 40, "5": 41, "t": 42, "g": 43, "v": 44, "space": 45, "num8": 46, "f6": 48, "6": 49, "y": 50, "h": 51, "b": 52, "num9": 54, "f7": 56, "7": 57, "u": 58, "j": 59, "n": 60, "num4": 62, "f8": 64, "8": 65, "i": 66, "k": 67, "m": 68, "num5": 70, "f9": 72, "9": 73, "o": 74, "l": 75, "comma": 76, "num6": 78, "f10": 80, "0": 81, "p": 82, "semicolon": 83, "period": 84, "numplus": 86, "f11": 88, "minus": 89, "leftbracket": 90, "quote": 91, "slash": 92, "num2": 94, "f12": 96, "equal": 97, "rightbracket": 98, "num3": 102, "prtsc": 104, "backspace": 105, "backslash": 106, "enter": 107, "left": 109, "num0": 110, "scrlk": 112, "insert": 113, "delete": 114, "pgup": 115, "up": 116, "down": 117, "numdot": 118, "pause": 120, "home": 121, "end": 122, "pgdn": 123, "num1": 124, "right": 125, "numenter": 126}
+
+CONFIG = os.path.expanduser("~/.local/share/Terraria/input profiles.json")
+_KEY_ALIASES = {
+    "escape": "esc", "back": "backspace", "capslock": "caps",
+    "leftshift": "lshift", "rightshift": "rshift",
+    "leftcontrol": "lctrl", "rightcontrol": "rctrl",
+    "leftalt": "lalt", "rightalt": "ralt",
+    "add": "numplus", "subtract": "numminus",
+    "multiply": "numasterisk", "divide": "numslash",
+    "pageup": "pgup", "pagedown": "pgdn", "printscreen": "prtsc",
+    "oemplus": "equal", "oemminus": "minus",
+}
+
+
+def config_key_to_slot(key):
+    if not isinstance(key, str) or key.startswith("Mouse"):
+        return None
+    if len(key) == 2 and key[0] == "D" and key[1].isdigit():
+        key = key[1]              # D1 -> 1, D0 -> 0
+    name = key.lower()
+    name = _KEY_ALIASES.get(name, name)
+    return KEY_SLOTS.get(name)
+
+
+def read_bindings(cache):
+    """Read Terraria key bindings, reloading only when the file changes."""
+    try:
+        mtime = os.stat(CONFIG).st_mtime
+    except OSError:
+        return cache.get("bindings", {})
+    if mtime == cache.get("mtime"):
+        return cache["bindings"]
+    import json
+    try:
+        data = json.load(open(CONFIG))
+        profile = data.get("Selected Profile", "Custom")
+        kb = data[profile]["Mouse And Keyboard"]
+        bindings = {}
+        for action, keys in kb.items():
+            if not keys:
+                continue
+            slot = config_key_to_slot(keys[0])
+            if slot is not None:
+                bindings[action] = slot
+    except (OSError, KeyError, ValueError):
+        bindings = cache.get("bindings", {})
+    cache["mtime"] = mtime
+    cache["bindings"] = bindings
+    return bindings
 
 
 def bar_color(pct, low=(255, 0, 0), high=(0, 255, 0)):
@@ -117,19 +180,29 @@ def main():
 
     s = connect_sdk(args.port)
     interval = 1.0 / args.hz
+    cfg_cache = {}
+    last_good = None
     try:
         while True:
             hp = read_hp(mem, addr)
+            mana_raw = read_hp(mem, addr + 4)
+            max_mana_raw = read_hp(mem, addr + 8)
             if hp is None:
                 break
-            if hp > max_hp:
-                # armor/life upgrades change the pattern -> re-scan
-                addr, max_hp = find_hp_address(pid, mem, hp)
+            # all-zero block means the player object moved (respawn)
+            if (hp == 0 and mana_raw == 0 and max_mana_raw == 0) or hp > max_hp:
+                addr, max_hp = find_hp_address(pid, mem, args.max_hp, last_good)
+                print(f"[rescan] addr={hex(addr) if addr else None} "
+                      f"prefer={last_good}", flush=True)
                 if addr is None:
                     break
                 hp = read_hp(mem, addr)
-            mana = read_hp(mem, addr + 4) or 0
-            max_mana = read_hp(mem, addr + 8) or 120
+                mana_raw = read_hp(mem, addr + 4)
+                max_mana_raw = read_hp(mem, addr + 8)
+            if hp and mana_raw:
+                last_good = (hp, mana_raw)
+            mana = mana_raw or 0
+            max_mana = max_mana_raw or 120
             colors = [(0, 0, 0)] * 128
             hp_c = bar_color(hp / max(1, max_hp))
             mana_c = bar_color(mana / max(1, max_mana),
@@ -152,6 +225,16 @@ def main():
                 biome = "unknown"
             for slot in WASD:
                 colors[slot] = BIOME_COLORS[biome]
+
+            binds = read_bindings(cfg_cache)
+            heal_slot = binds.get("QuickHeal")
+            mana_slot = binds.get("QuickMana")
+            if heal_slot is not None:
+                miss = 1.0 - hp / max(1, max_hp)
+                colors[heal_slot] = (int(255 * miss), 0, 0) if miss > 0 else (0, 0, 0)
+            if mana_slot is not None:
+                miss = 1.0 - mana / max(1, max_mana)
+                colors[mana_slot] = (0, 0, int(255 * miss)) if miss > 0 else (0, 0, 0)
             send_colors(s, colors)
             time.sleep(interval)
     except KeyboardInterrupt:

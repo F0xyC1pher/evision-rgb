@@ -108,7 +108,7 @@ class Bridge:
                 except Exception as exc:
                     print(f"[hid] {exc}", flush=True)
                     self.failures = getattr(self, "failures", 0) + 1
-                    if self.failures >= 3:
+                    if self.failures >= 1:
                         try:
                             self._reopen()
                             last_reopen = time.time()

@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/evision-sdk --port 6742 --hz 10
+ExecStart=/usr/bin/python3 /usr/local/bin/evision-sdk --port 6742 --hz 5
 Restart=on-failure
 RestartSec=3
 
