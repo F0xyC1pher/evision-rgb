@@ -6,6 +6,7 @@ Run with sudo (needed to read /proc/<pid>/mem when ptrace_scope=1).
 """
 import argparse
 import os
+import pwd
 import socket
 import struct
 import time
@@ -86,7 +87,17 @@ BIOME_COLORS = {"forest": (0, 255, 0), "desert": (255, 200, 0),
 
 KEY_SLOTS = {"esc": 0, "grave": 1, "tab": 2, "caps": 3, "numlock": 6, "f1": 8, "1": 9, "q": 10, "a": 11, "numslash": 14, "f2": 16, "2": 17, "w": 18, "s": 19, "z": 20, "numasterisk": 22, "f3": 24, "3": 25, "e": 26, "d": 27, "x": 28, "numminus": 30, "f4": 32, "4": 33, "r": 34, "f": 35, "c": 36, "num7": 38, "f5": 40, "5": 41, "t": 42, "g": 43, "v": 44, "space": 45, "num8": 46, "f6": 48, "6": 49, "y": 50, "h": 51, "b": 52, "num9": 54, "f7": 56, "7": 57, "u": 58, "j": 59, "n": 60, "num4": 62, "f8": 64, "8": 65, "i": 66, "k": 67, "m": 68, "num5": 70, "f9": 72, "9": 73, "o": 74, "l": 75, "comma": 76, "num6": 78, "f10": 80, "0": 81, "p": 82, "semicolon": 83, "period": 84, "numplus": 86, "f11": 88, "minus": 89, "leftbracket": 90, "quote": 91, "slash": 92, "num2": 94, "f12": 96, "equal": 97, "rightbracket": 98, "num3": 102, "prtsc": 104, "backspace": 105, "backslash": 106, "enter": 107, "left": 109, "num0": 110, "scrlk": 112, "insert": 113, "delete": 114, "pgup": 115, "up": 116, "down": 117, "numdot": 118, "pause": 120, "home": 121, "end": 122, "pgdn": 123, "num1": 124, "right": 125, "numenter": 126}
 
-CONFIG = os.path.expanduser("~/.local/share/Terraria/input profiles.json")
+def _user_home():
+    user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    if user:
+        try:
+            return pwd.getpwnam(user).pw_dir
+        except KeyError:
+            pass
+    return os.path.expanduser("~")
+
+
+CONFIG = os.path.join(_user_home(), ".local/share/Terraria/input profiles.json")
 _KEY_ALIASES = {
     "escape": "esc", "back": "backspace", "capslock": "caps",
     "leftshift": "lshift", "rightshift": "rshift",
