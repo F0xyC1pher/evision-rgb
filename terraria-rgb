@@ -328,6 +328,9 @@ def main():
                 for b in find_bindings_arrays(pid, mem):
                     if b not in bind_prev:
                         bind_prev[b] = live_bindings(mem, b)
+                        # A newly allocated copy is the one the game switched to
+                        bind_base = b
+                        print(f"[bind] new active -> {hex(b)}", flush=True)
                 bind_refresh = nonlocal_now
             for b in bind_bases:
                 vals = live_bindings(mem, b)
