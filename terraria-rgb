@@ -32,12 +32,10 @@ def open_mem(pid):
     return os.open(f"/proc/{pid}/mem", os.O_RDONLY)
 
 
-def find_hp_address(pid, mem, max_hp, prefer=None):
-    """Find the player HP field by structure shape, preferring the last
-    known good HP/mana pair after a respawn moves the player object."""
+def find_hp_candidates(pid, mem, max_hp):
+    """All plausible player-HP fields in memory."""
     pair = struct.pack("<II", max_hp, max_hp)
-    candidates = []
-    result = None
+    out = []
     for line in open(f"/proc/{pid}/maps"):
         p = line.split()
         if len(p) < 5 or "rw-p" not in p[1]:
@@ -50,7 +48,6 @@ def find_hp_address(pid, mem, max_hp, prefer=None):
             except OSError:
                 continue
             start = 0
-            found = None
             while True:
                 i = data.find(pair, start)
                 if i < 0:
@@ -62,15 +59,19 @@ def find_hp_address(pid, mem, max_hp, prefer=None):
                         0 < hp <= max_hp and 20 <= mana <= 500 and
                         read_hp(mem, addr + 8) == mana and
                         read_hp(mem, addr + 12) == mana):
-                    candidates.append((addr, hp, mana))
+                    out.append((addr, hp, mana))
                 start = i + 1
+    return out
+
+
+def find_hp_address(pid, mem, max_hp, prefer=None):
+    cands = find_hp_candidates(pid, mem, max_hp)
     if prefer:
-        for addr, hp, mana in candidates:
+        for addr, hp, mana in cands:
             if hp == prefer[0] and mana == prefer[1]:
                 return addr, max_hp
-    if candidates:
-        return candidates[0][0], max_hp
-    return None, None
+    return (cands[0][0], max_hp) if cands else (None, None)
+
 
 def read_hp(mem, addr):
     try:
@@ -275,10 +276,25 @@ def main():
     bind_bases = ([bind_base] if args.bind_addr else find_bindings_arrays(pid, mem))
     bind_prev = {b: live_bindings(mem, b) for b in bind_bases}
     bind_refresh = time.time()
+    hp_candidates = find_hp_candidates(pid, mem, args.max_hp)
+    hp_prev = {a: (h, m) for a, h, m in hp_candidates}
+    hp_refresh = time.time()
     if bind_base:
         print(f"bindings array at {hex(bind_base)}", flush=True)
     try:
         while True:
+            if time.time() - hp_refresh >= 2.0:
+                hp_candidates = find_hp_candidates(pid, mem, args.max_hp)
+                hp_refresh = time.time()
+            for a, h, m in hp_candidates:
+                if a not in hp_prev:
+                    hp_prev[a] = (h, m)
+                    continue
+                if (h, m) != hp_prev[a]:
+                    hp_prev[a] = (h, m)
+                    if a != addr:
+                        addr = a
+                        print(f"[hp] active -> {hex(a)} {h}/{m}", flush=True)
             hp = read_hp(mem, addr)
             mana_raw = read_hp(mem, addr + 4)
             max_mana_raw = read_hp(mem, addr + 8)
