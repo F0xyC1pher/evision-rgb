@@ -18,4 +18,7 @@ install -m 644 "$SRC/evision-sdk.service"           /usr/lib/systemd/user/
 udevadm control --reload-rules
 udevadm trigger /sys/bus/usb/devices/1-1.6 2>/dev/null || true
 
+systemctl --user daemon-reload
+systemctl --user enable --now evision-sdk.service
+
 echo "Installed. Verify with: evision-rgb status"
