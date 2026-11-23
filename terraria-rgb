@@ -272,6 +272,9 @@ def main():
     cfg_cache = {}
     last_good = None
     bind_base = int(args.bind_addr, 0) if args.bind_addr else find_bindings_array(pid, mem)
+    bind_bases = ([bind_base] if args.bind_addr else find_bindings_arrays(pid, mem))
+    bind_prev = {b: live_bindings(mem, b) for b in bind_bases}
+    bind_refresh = time.time()
     if bind_base:
         print(f"bindings array at {hex(bind_base)}", flush=True)
     try:
@@ -318,7 +321,21 @@ def main():
             for slot in WASD:
                 colors[slot] = BIOME_COLORS[biome]
 
-            binds = (live_bindings(mem, bind_base) if bind_base else {})
+            # Re-scan the candidate arrays periodically; Terraria may
+            # allocate a fresh copy when bindings are changed in-session.
+            nonlocal_now = time.time()
+            if nonlocal_now - bind_refresh >= 10.0:
+                for b in find_bindings_arrays(pid, mem):
+                    if b not in bind_prev:
+                        bind_prev[b] = live_bindings(mem, b)
+                bind_refresh = nonlocal_now
+            for b in bind_bases:
+                vals = live_bindings(mem, b)
+                if vals and vals != bind_prev.get(b):
+                    bind_prev[b] = vals
+                    bind_base = b
+                    print(f"[bind] active -> {hex(b)} {vals}", flush=True)
+            binds = live_bindings(mem, bind_base) if bind_base else {}
             if not binds.get("QuickHeal"):
                 binds = read_bindings(cfg_cache)
             heal_slot = binds.get("QuickHeal")
