@@ -242,10 +242,10 @@ def main():
             mana_slot = binds.get("QuickMana")
             if heal_slot is not None:
                 miss = 1.0 - hp / max(1, max_hp)
-                colors[heal_slot] = (int(255 * miss), 0, 0) if miss > 0 else (0, 0, 0)
+                colors[heal_slot] = (60 + int(195 * miss), 0, 0)
             if mana_slot is not None:
                 miss = 1.0 - mana / max(1, max_mana)
-                colors[mana_slot] = (0, 0, int(255 * miss)) if miss > 0 else (0, 0, 0)
+                colors[mana_slot] = (0, 0, 60 + int(195 * miss))
             send_colors(s, colors)
             time.sleep(interval)
     except KeyboardInterrupt:
