@@ -68,6 +68,7 @@ class Bridge:
         self.custom_mode_set = False
         self.last_write = 0.0
         self.dirty = threading.Event()
+        self.last_change = time.time()
         self.clients = 0
         self.lock = threading.Lock()
         self.interval = 1.0 / hz
@@ -98,7 +99,8 @@ class Bridge:
             with self.lock:
                 cols = list(self.colors)
             if self.clients > 0:
-                rgb = [((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                # Colors are stored as OpenRGB RGBColor (0x00BBGGRR)
+                rgb = [(c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF)
                        for c in cols]
                 try:
                     self.kb.set_dynamic(rgb)
@@ -115,13 +117,19 @@ class Bridge:
                             print(f"[hid] reopen failed: {reopen_exc}",
                                   flush=True)
                         self.failures = 0
-            time.sleep(self.interval)
+            # Burst while colors are changing, then drop to a slow keepalive.
+            # The keyboard forgets direct mode after ~1 s, so 2 Hz is enough
+            # to hold it without flooding the USB bus.
+            busy = (now - self.last_change) < 0.8
+            delay = self.interval if busy else 0.5
+            time.sleep(delay if self.clients > 0 else 0.5)
 
     def set_colors(self, pairs):
         with self.lock:
             for idx, color in pairs:
                 if 0 <= idx < NUM_LEDS:
                     self.colors[idx] = color & 0xFFFFFF
+        self.last_change = time.time()
         self.dirty.set()
 
     def device_data(self):
