@@ -379,12 +379,12 @@ def main():
                             w = 0.5 + 0.5 * __import__("math").sin(
                                 phase * 1.4 - idx * __import__("math").pi / 2)
                             v = 8 + 10 * w
-                            colors[i] = (0, int(v * 0.9), v)
+                            colors[i] = (0, int(v * 0.9), int(v))
                         else:
                             w = 0.5 + 0.5 * __import__("math").sin(
                                 i * 0.16 - phase)
                             v = 10 + 8 * w
-                            colors[i] = (int(v * 0.85), int(v * 0.92), v)
+                            colors[i] = (int(v * 0.85), int(v * 0.92), int(v))
                     else:
                         colors[i] = (14, 16, 20)
             send_colors(s, colors)
