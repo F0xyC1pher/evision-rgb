@@ -488,6 +488,32 @@ def main():
                 print(f"  {name} -> slot {slots[name]} = {value}")
             print(f"Direct per-key for {seconds or 'infinite'}s (Ctrl-C to stop)")
             kb.direct_loop(colors, seconds)
+        elif cmd == "wave":
+            # Animated background wave across all 128 keys (until Ctrl-C).
+            import math
+            hz = float(sys.argv[2]) if len(sys.argv) > 2 else 10.0
+            print(f"Wave animation {hz} Hz (Ctrl-C to stop)")
+            started = time.time()
+            try:
+                while True:
+                    phase = (time.time() - started) * 2.0
+                    colors = []
+                    for i in range(128):
+                        w = 0.5 + 0.5 * math.sin(i * 0.28 - phase)
+                        colors.append((int(20 * w), int(35 * w), int(55 * w)))
+                    try:
+                        kb.set_dynamic(colors)
+                    except Exception:
+                        try:
+                            kb.close()
+                        except Exception:
+                            pass
+                        kb = Keyboard()
+                    time.sleep(1.0 / hz)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                kb.end_dynamic()
         elif cmd == "enddirect":
             kb.end_dynamic()
             print("direct mode ended")

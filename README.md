@@ -92,6 +92,14 @@ direct-режим: пока процесс жив, он передаёт пол�
 ```sh
 evision-rgb key esc=ff0000 f1=00ff00 1=0000ff        # до Ctrl-C
 evision-rgb slots 0=ff0000 8=00ff00 9=0000ff 30      # по номерам слотов, 30 с
+evision-rgb wave 10                                  # анимированная волна, до Ctrl-C
+```
+
+Анимация работает и вместе с Terraria: запусти reader с `--animate`, и фон
+будет плавно бегущим градиентом, а эффекты HP/маны/биома — поверх него:
+
+```sh
+sudo terraria-rgb --animate
 ```
 
 ### Эффекты

@@ -238,6 +238,8 @@ def main():
     ap.add_argument("--port", type=int, default=6742)
     ap.add_argument("--hz", type=float, default=5.0)
     ap.add_argument("--max-hp", type=int, default=100)
+    ap.add_argument("--animate", action="store_true",
+                    help="animate the dim background as a slow wave")
     ap.add_argument("--list-binds", action="store_true",
                     help="list candidate binding arrays and exit")
     ap.add_argument("--bind-addr", type=str, default=None,
@@ -367,9 +369,15 @@ def main():
                 colors[mana_slot] = (0, 0, 60 + int(195 * miss))
             # Fill every unused key with a faint glow so the keyboard is
             # readable in the dark.  Effects above override it.
+            phase = time.time() * 2.0
             for i, c in enumerate(colors):
                 if c[0] == 0 and c[1] == 0 and c[2] == 0:
-                    colors[i] = (14, 16, 20)
+                    if args.animate:
+                        v = 14 + 12 * (0.5 + 0.5 * __import__("math").sin(
+                            i * 0.28 - phase))
+                        colors[i] = (int(v * 0.7), int(v * 0.85), int(v))
+                    else:
+                        colors[i] = (14, 16, 20)
             send_colors(s, colors)
             time.sleep(interval)
     except KeyboardInterrupt:
