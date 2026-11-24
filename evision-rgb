@@ -383,6 +383,23 @@ def main():
         print(__doc__)
         return 1
     cmd = sys.argv[1]
+    if cmd in ("help", "-h", "--help"):
+        print(__doc__)
+        print("Commands:")
+        print("  status                     current mode/brightness/color")
+        print("  effects                    list hardware effects")
+        print("  effect NAME [k=v ...]      set effect (speed=, color=, brightness=)")
+        print("  static RRGGBB [0-9]        static color, saved to keyboard")
+        print("  save / restore             save/restore config in ~/.config")
+        print("  keys                       key name -> LED slot map")
+        print("  custom KEY=RRGGBB ...      store per-key colors in keyboard flash")
+        print("  rainbow                    rainbow stored in keyboard flash")
+        print("  direct RRGGBB [seconds]    live direct color (Ctrl-C to stop)")
+        print("  key KEY=RRGGBB [seconds]   live per-key colors")
+        print("  slots SLOT=RRGGBB [sec]    live colors by raw slot index")
+        print("  wave [hz]                  animated wave (stop SDK bridge first)")
+        print("  enddirect                  leave direct mode")
+        return 0
     if cmd == "wave":
         import socket
         probe = socket.socket()
