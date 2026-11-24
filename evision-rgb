@@ -491,16 +491,26 @@ def main():
         elif cmd == "wave":
             # Animated background wave across all 128 keys (until Ctrl-C).
             import math
-            hz = float(sys.argv[2]) if len(sys.argv) > 2 else 10.0
+            hz = float(sys.argv[2]) if len(sys.argv) > 2 else 20.0
+            arrows = [109, 116, 117, 125]  # left, up, down, right
             print(f"Wave animation {hz} Hz (Ctrl-C to stop)")
             started = time.time()
             try:
                 while True:
-                    phase = (time.time() - started) * 2.0
+                    phase = (time.time() - started) * 1.2
                     colors = []
                     for i in range(128):
-                        w = 0.5 + 0.5 * math.sin(i * 0.28 - phase)
-                        colors.append((int(20 * w), int(35 * w), int(55 * w)))
+                        if i in arrows:
+                            colors.append((0, 0, 0))
+                            continue
+                        w = 0.5 + 0.5 * math.sin(i * 0.16 - phase)
+                        v = 10 + 10 * w          # soft 10..20 range
+                        colors.append((int(v * 0.85), int(v * 0.92), v))
+                    # Separate gentle rotating glow for the arrow cluster
+                    for idx, slot in enumerate(arrows):
+                        w = 0.5 + 0.5 * math.sin(phase * 1.4 - idx * math.pi / 2)
+                        v = 8 + 14 * w
+                        colors[slot] = (0, int(v * 0.9), v)
                     for attempt in range(4):
                         try:
                             kb.set_dynamic(colors)

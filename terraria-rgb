@@ -369,13 +369,22 @@ def main():
                 colors[mana_slot] = (0, 0, 60 + int(195 * miss))
             # Fill every unused key with a faint glow so the keyboard is
             # readable in the dark.  Effects above override it.
-            phase = time.time() * 2.0
+            phase = time.time() * 1.2
+            arrows = (109, 116, 117, 125)
             for i, c in enumerate(colors):
                 if c[0] == 0 and c[1] == 0 and c[2] == 0:
                     if args.animate:
-                        v = 14 + 12 * (0.5 + 0.5 * __import__("math").sin(
-                            i * 0.28 - phase))
-                        colors[i] = (int(v * 0.7), int(v * 0.85), int(v))
+                        if i in arrows:
+                            idx = arrows.index(i)
+                            w = 0.5 + 0.5 * __import__("math").sin(
+                                phase * 1.4 - idx * __import__("math").pi / 2)
+                            v = 8 + 10 * w
+                            colors[i] = (0, int(v * 0.9), v)
+                        else:
+                            w = 0.5 + 0.5 * __import__("math").sin(
+                                i * 0.16 - phase)
+                            v = 10 + 8 * w
+                            colors[i] = (int(v * 0.85), int(v * 0.92), v)
                     else:
                         colors[i] = (14, 16, 20)
             send_colors(s, colors)
