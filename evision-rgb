@@ -383,6 +383,17 @@ def main():
         print(__doc__)
         return 1
     cmd = sys.argv[1]
+    if cmd == "wave":
+        import socket
+        probe = socket.socket()
+        busy = probe.connect_ex(("127.0.0.1", 6742)) == 0
+        probe.close()
+        if busy:
+            raise SystemExit(
+                "SDK bridge is using the keyboard. Stop it first:\n"
+                "  systemctl --user stop evision-sdk\n"
+                "then run 'evision-rgb wave', and start it again with\n"
+                "  systemctl --user start evision-sdk")
     with Keyboard() as kb:
         if cmd == "status":
             cmd_status(kb)
@@ -491,6 +502,16 @@ def main():
         elif cmd == "wave":
             # Animated background wave across all 128 keys (until Ctrl-C).
             import math
+            import socket
+            probe = socket.socket()
+            if probe.connect_ex(("127.0.0.1", 6742)) == 0:
+                probe.close()
+                raise SystemExit(
+                    "SDK bridge is using the keyboard. Stop it first:\n"
+                    "  systemctl --user stop evision-sdk\n"
+                    "then run 'evision-rgb wave', and start it again with\n"
+                    "  systemctl --user start evision-sdk")
+            probe.close()
             hz = float(sys.argv[2]) if len(sys.argv) > 2 else 20.0
             arrows = [109, 116, 117, 125]  # left, up, down, right
             print(f"Wave animation {hz} Hz (Ctrl-C to stop)")
