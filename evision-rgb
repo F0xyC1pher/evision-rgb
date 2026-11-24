@@ -501,19 +501,23 @@ def main():
                     for i in range(128):
                         w = 0.5 + 0.5 * math.sin(i * 0.28 - phase)
                         colors.append((int(20 * w), int(35 * w), int(55 * w)))
-                    try:
-                        kb.set_dynamic(colors)
-                    except Exception:
+                    for attempt in range(4):
                         try:
-                            kb.close()
+                            kb.set_dynamic(colors)
+                            break
                         except Exception:
-                            pass
-                        kb = Keyboard()
+                            # A timed-out frame may be only partially written;
+                            # resend the whole frame after reopening HID.
+                            try:
+                                kb.close()
+                            except Exception:
+                                pass
+                            kb = Keyboard()
                     time.sleep(1.0 / hz)
             except KeyboardInterrupt:
-                pass
-            finally:
-                kb.end_dynamic()
+                # libusb sometimes aborts in hid_close during signal handling.
+                # All frames are already on the device, so exit without cleanup.
+                os._exit(0)
         elif cmd == "enddirect":
             kb.end_dynamic()
             print("direct mode ended")
